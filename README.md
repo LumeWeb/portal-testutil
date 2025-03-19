@@ -1,0 +1,414 @@
+# Portal Testing Library
+
+This package provides a comprehensive testing framework for GORM-backed services in the portal ecosystem. It is designed to simplify testing by providing a fluent interface for building SQL expectations and a registry pattern for mock services.
+
+## Architecture
+
+The library properly extends the core Portal testing facilities, providing specialized utilities for database testing, SQL expectations, and service mocking. It follows these design principles:
+
+1. **Core Integration**: Built on top of Portal's core testing framework through direct embedding
+2. **Fluent Interfaces**: Builder patterns for expressive test setups 
+3. **Minimal Boilerplate**: Reduces common testing boilerplate
+4. **Extensibility**: Easily extendable for specific testing needs
+
+## Key Components
+
+### 1. DBTestContext
+
+`DBTestContext` extends the portal's core test context by embedding it and adding database testing capabilities:
+
+```go
+// Create a test context with default configuration
+testCtx := testutil.NewDBTestContext(t)
+defer testCtx.Teardown()
+
+// Or with custom configuration
+testCtx := testutil.NewDBTestContext(t, 
+    testutil.WithTablePrefix("my_prefix_"))
+
+// Register a service
+testCtx.RegisterService("my_service", myMockService)
+
+// Verify expectations at the end of the test
+testCtx.VerifyExpectations()
+```
+
+### 2. ExpectationsBuilder
+
+`ExpectationsBuilder` provides a fluent interface for building SQL expectations:
+
+```go
+// Set up expectations for a transaction
+testCtx.ForTable("users")
+    .ExpectTransaction()
+    .Insert(1)
+    .Commit()
+
+// Set up expectations for a find operation
+testCtx.ForTable("items")
+    .ExpectFind()
+    .ByID(1)
+    .ReturnRows(rows)
+```
+
+### 3. Validation Testing
+
+`ValidationTester` provides utilities for testing validation logic:
+
+```go
+// Get validation helper 
+validator := testCtx.Validation()
+
+// Test required fields
+validator.AssertRequiredField(validateUsername, "username")
+
+// Test string length
+validator.AssertMinLength(validatePassword, "password", 8)
+validator.AssertMaxLength(validateUsername, "username", 50)
+
+// Test email format
+validator.AssertEmailFormat(validateEmail, "email")
+
+// Test URL format
+validator.AssertURLFormat(validateWebsite, "website")
+
+// Test numeric range
+validator.AssertNumericRange(validateAge, "age", 18, 120)
+```
+
+### 4. Transaction Testing
+
+Enhanced transaction testing capabilities:
+
+```go
+// Use the transaction helper for automatic commit/rollback
+err := testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
+    // Perform operations within a transaction
+    return nil
+})
+
+// Force rollback even if successful
+err := testCtx.Transaction().WithRollbackOnly(func(tx *gorm.DB) error {
+    // Operation will be rolled back regardless of return value
+    return nil
+})
+
+// Force commit even if error
+err := testCtx.Transaction().WithCommitOnly(func(tx *gorm.DB) error {
+    // Operation will be committed regardless of return value
+    return nil
+})
+```
+
+### 5. Concurrent Testing
+
+Testing concurrent operations:
+
+```go
+// Run concurrent operations
+errors := testCtx.Concurrent().RunWithConcurrency(10, func(id int) error {
+    // Perform concurrent operations
+    return nil
+})
+
+// Run with specific timeout
+errors := testCtx.Concurrent().RunWithConcurrencyAndTimeout(
+    10, 30*time.Second, func(id int) error {
+    // Perform concurrent operations with longer timeout
+    return nil
+})
+
+// Run parallel database queries
+errors := testCtx.Concurrent().RunParallelQueries(5, func(id int, dbCtx *DBTestContext) error {
+    // Execute database queries in parallel
+    return nil
+})
+```
+
+### 6. ServiceMockRegistry
+
+`ServiceMockRegistry` provides a registry for mock service implementations:
+
+```go
+// Register a mock factory
+testutil.RegisterMockFactory("my_service", func() core.Service {
+    return new(MockMyService)
+})
+
+// Set up a mock service in a test
+testutil.WithService("my_service", func(m *mock.Mock) {
+    m.On("GetItem", uint(1)).Return(myItem, nil)
+})(testCtx)
+```
+
+### 7. Row Builders and Wrappers
+
+Enhanced row builders for creating test data, with SQL-compatible scanning:
+
+```go
+// Create model rows with additional fields
+rows := testutil.NewModelRowBuilder("name", "email")
+    .AddModelRow(1, "John Doe", "john@example.com")
+    .AddModelRow(2, "Jane Smith", "jane@example.com")
+    .Build()
+
+// Add rows from maps
+rows := testutil.NewRowBuilder("id", "name", "email")
+    .AddRowWithMap(map[string]interface{}{
+        "id": 1,
+        "name": "John Doe",
+        "email": "john@example.com",
+    })
+    .Build()
+
+// Create rows with wrapper for compatibility with SQL interface
+rowsWrapper := testutil.NewRowBuilder("id", "name")
+    .AddRow(1, "John")
+    .BuildWithWrapper()
+
+// Now you can use Next() and Scan() methods like real database rows
+for rowsWrapper.Next() {
+    var id int
+    var name string
+    rowsWrapper.Scan(&id, &name)
+}
+```
+
+The row wrapper's scanning system provides comprehensive type conversion, supporting:
+
+- Basic types: string, []byte, int, int64, uint, float64, bool
+- Time values: time.Time, *time.Time
+- String conversions for numeric and boolean types
+- Reflection-based fallbacks for other types
+
+This makes the mock rows behave almost identically to real database rows, reducing test breakage when refactoring.
+
+### 8. Search Testing
+
+Testing search functionality:
+
+```go
+// Set up search expectations
+testCtx.Search()
+    .WithQuery("john")
+    .WithFields("name", "email")
+    .WithPageSize(10)
+    .WithPage(1)
+    .ExpectCount(2)
+    .ReturnResults(rows)
+
+// Or use the fluent interface directly with ForTable
+testCtx.ForTable("users")
+    .ExpectSearch("john")
+    .WithFields("name", "email")
+    .ReturnRows(rows)
+```
+
+### 9. Test Helpers
+
+The package provides multiple test helpers for different testing scenarios:
+
+- `RunServiceTests` - For testing service methods
+- `RunTransactionTests` - For testing transaction behavior
+- `RunConcurrentTests` - For testing concurrent operations
+- `RunTestScenario` - For testing multi-step scenarios
+
+## Example Usage
+
+### Service Method Test
+
+```go
+// Run tests with default configuration
+testutil.RunServiceTests(t, []testutil.ServiceTestCase{
+    {
+        Name: "Successfully get an item",
+        SetupMock: func(tc *testutil.DBTestContext) {
+            // Set up SQL expectations
+            tc.ForTable("items")
+                .ExpectFind()
+                .ByID(1)
+                .ReturnRows(
+                    testutil.NewModelRowBuilder("name", "description")
+                        .AddModelRow(1, "Test Item", "A test item")
+                        .Build(),
+                )
+        },
+        ExecuteTest: func(ctx core.Context) (interface{}, error) {
+            // Execute the service method
+            service := ctx.Service("my_service").(MyService)
+            return service.GetItem(1)
+        },
+        ExpectResult: myExpectedItem,
+    },
+})
+```
+
+### Transaction Test
+
+```go
+// Transaction tests
+testutil.RunTransactionTests(t, []testutil.TransactionTestCase{
+    {
+        Name: "Transaction rolls back on error",
+        SetupMock: func(tc *testutil.DBTestContext) {
+            tc.ForTable("items")
+                .ExpectTransaction()
+                .InsertError(errors.New("database error"))
+                .Rollback()
+        },
+        ExecuteService: func(ctx core.Context) error {
+            service := ctx.Service("my_service").(MyService)
+            return service.CreateItem(myItem)
+        },
+        ExpectError:    true,
+        ErrorContains:  "database error",
+    },
+})
+```
+
+### Validation Test
+
+```go
+func TestUserValidation(t *testing.T) {
+    // Create test context
+    testCtx := testutil.NewDBTestContext(t)
+    defer testCtx.Teardown()
+    
+    // Get validation helper
+    validator := testCtx.Validation()
+    
+    // Test email validation
+    validator.AssertEmailFormat(user.ValidateEmail, "email")
+    
+    // Test password validation
+    validator.AssertMinLength(user.ValidatePassword, "password", 8)
+}
+```
+
+### Multi-step Scenario Test
+
+```go
+// Run with default configuration
+testutil.RunTestScenario(t, testutil.TestScenario{
+    Name:        "Create and retrieve an item",
+    Description: "Tests creating an item and then retrieving it",
+    SetupMock: func(tc *testutil.DBTestContext) {
+        // 1. Create item
+        tc.ForTable("items")
+            .ExpectTransaction()
+            .Insert(1)
+            .Commit()
+            
+        // 2. Get item
+        tc.ForTable("items")
+            .ExpectFind()
+            .ByID(1)
+            .ReturnRows(
+                testutil.NewModelRowBuilder("name", "description")
+                    .AddModelRow(1, "Test Item", "A test item")
+                    .Build(),
+            )
+    },
+    Steps: []testutil.TestStep{
+        {
+            Name: "Create a new item",
+            ExecuteTest: func(ctx core.Context) (interface{}, error) {
+                service := ctx.Service("my_service").(MyService)
+                return service.CreateItem(myItem)
+            },
+            ExpectResult: uint(1),
+        },
+        {
+            Name: "Retrieve the created item",
+            ExecuteTest: func(ctx core.Context) (interface{}, error) {
+                service := ctx.Service("my_service").(MyService)
+                return service.GetItem(1)
+            },
+            ExpectResult: myExpectedItem,
+        },
+    },
+})
+```
+
+## Implementing a Mock Service
+
+To implement a mock service that works with this library:
+
+```go
+type MockMyService struct {
+    mock.Mock
+}
+
+// ID returns the service ID
+func (m *MockMyService) ID() string {
+    return "my_service"
+}
+
+// Config returns the service configuration
+func (m *MockMyService) Config() (any, error) {
+    return nil, nil
+}
+
+// Mock returns the underlying mock object
+func (m *MockMyService) Mock() *mock.Mock {
+    return &m.Mock
+}
+
+// GetItem demonstrates a simple service method
+func (m *MockMyService) GetItem(id uint) (interface{}, error) {
+    args := m.Called(id)
+    if args.Get(0) == nil {
+        return nil, args.Error(1)
+    }
+    return args.Get(0), args.Error(1)
+}
+
+func init() {
+    // Register the mock factory
+    testutil.RegisterMockFactory("my_service", func() core.Service {
+        return new(MockMyService)
+    })
+}
+```
+
+## Mailer Testing
+
+The `MailerTestHelper` provides utilities for testing email functionality. It implements the `core.MailerService` interface and captures emails instead of sending them.
+
+### Usage
+
+```go
+// Create test context
+tc := NewDBTestContext(t)
+defer tc.Teardown()
+
+// Create mailer test helper
+mailerHelper := NewMailerTestHelper(t)
+
+// Register test templates
+mailerHelper.RegisterTemplate(
+    "notification_template",
+    "Notification: {{.Subject}}",
+    "Hello,\n\n{{.Body}}\n\nRegards,\nThe System"
+)
+
+// Register the mailer with the test context
+mailerHelper.RegisterWithContext(tc)
+
+// Create your service that uses the mailer
+service := NewYourService(tc.Context)
+
+// Test your service method that sends an email
+err := service.SendNotification("user@example.com", "Important Update", "This is an important update.")
+assert.NoError(t, err)
+
+// Assert that the email was sent
+email := mailerHelper.AssertEmailSent("notification_template", "user@example.com")
+
+// Assert the email content
+mailerHelper.AssertEmailContent(email, "Notification: Important Update", "This is an important update.")
+
+// Verify that the variables were passed correctly
+assert.Equal(t, "Important Update", email.SubjectVars["Subject"])
+assert.Equal(t, "This is an important update.", email.BodyVars["Body"])
+```
