@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.1.4 (2025-03-20)
+
+### Added
+- Added new specialized methods for handling complex GORM query patterns:
+  - `HandleStandardFirstRows()`: For reliable testing of basic First() queries
+  - `HandleDeletedNotNullRows()`: For testing soft-deleted record retrieval
+  - `HandleDeletedAtRows()`: For testing queries with explicit deleted_at conditions
+- Added `WithDeletedAt()` method for better soft delete handling in tests
+- Added `SkipVerification()` method to bypass expectation verification when needed
+
+### Fixed
+- Fixed SQL pattern matching for GORM's complex query patterns
+- Improved testing of First() queries with automatic detection of First()-like patterns
+- Fixed pattern matching for complex WHERE clauses with parentheses
+- Enhanced handling of soft delete conditions in GORM queries
+- Improved compatibility with non-soft-delete models
+- Better handling of argument matching for various GORM query patterns
+
+### Changed
+- Improved diagnostic output for SQL pattern matching failures
+- Added more detailed pattern logging when debug mode is enabled
+- Enhanced detection of First()-like queries without requiring explicit First() calls
+
 ## 0.1.3 (2025-03-19)
 
 ### Added

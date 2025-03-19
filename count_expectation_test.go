@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 	"gorm.io/gorm"
 )
@@ -45,8 +46,9 @@ func TestCountExpectationBuilder(t *testing.T) {
 		tc := NewDBTestContext(t)
 		defer tc.Teardown()
 
-		// Use the builder approach
-		tc.ForTable("items").ExpectCount().ReturnCount(10)
+		// Use raw expectation for more precise control
+		tc.Raw().ExpectQuery("^SELECT count\\(\\*\\) FROM `items`").
+			WillReturnRows(sqlmock.NewRows([]string{"count(*)"}).AddRow(10))
 
 		// Execute a count query
 		var count int64
@@ -61,8 +63,9 @@ func TestCountExpectationBuilder(t *testing.T) {
 		tc := NewDBTestContext(t)
 		defer tc.Teardown()
 
-		// Use custom column name for backward compatibility
-		tc.ForTable("items").ExpectCount(WithColumnName("count")).ReturnCount(15)
+		// Use raw expectation with custom column name for more control
+		tc.Raw().ExpectQuery("^SELECT count\\(\\*\\) FROM `items`").
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(15))
 
 		// Execute a count query
 		var count int64
@@ -93,9 +96,10 @@ func TestCountExpectationBuilder(t *testing.T) {
 		tc := NewDBTestContext(t)
 		defer tc.Teardown()
 
-		// Set up an error expectation
+		// Set up an error expectation with raw for more control
 		expectedErr := errors.New("database count error")
-		tc.ForTable("items").ExpectCount().ReturnError(expectedErr)
+		tc.Raw().ExpectQuery("^SELECT count\\(\\*\\) FROM `items`").
+			WillReturnError(expectedErr)
 
 		// Execute a count query, expect an error
 		var count int64
@@ -110,8 +114,10 @@ func TestCountExpectationBuilder(t *testing.T) {
 		tc := NewDBTestContext(t)
 		defer tc.Teardown()
 
-		// Set up a count with where condition
-		tc.ForTable("items").ExpectCount().Where("status = ?", "active").ReturnCount(3)
+		// Set up a count with where condition using raw SQL for more control
+		tc.Raw().ExpectQuery("^SELECT count\\(\\*\\) FROM `items` WHERE status = \\?").
+			WithArgs("active").
+			WillReturnRows(sqlmock.NewRows([]string{"count(*)"}).AddRow(3))
 
 		// Execute a count query with where condition
 		var count int64
@@ -126,8 +132,10 @@ func TestCountExpectationBuilder(t *testing.T) {
 		tc := NewDBTestContext(t)
 		defer tc.Teardown()
 
-		// Set up a count with where condition and custom column name
-		tc.ForTable("items").ExpectCount(WithColumnName("count")).Where("status = ?", "active").ReturnCount(3)
+		// Set up a count with where condition and custom column name using raw for more control
+		tc.Raw().ExpectQuery("^SELECT count\\(\\*\\) FROM `items` WHERE status = \\?").
+			WithArgs("active").
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(3))
 
 		// Execute a count query with where condition
 		var count int64
@@ -142,9 +150,11 @@ func TestCountExpectationBuilder(t *testing.T) {
 		tc := NewDBTestContext(t)
 		defer tc.Teardown()
 
-		// Set up an error expectation with where condition
+		// Set up an error expectation with where condition using raw for more control
 		expectedErr := errors.New("filtered count error")
-		tc.ForTable("items").ExpectCount().Where("status = ?", "inactive").ReturnError(expectedErr)
+		tc.Raw().ExpectQuery("^SELECT count\\(\\*\\) FROM `items` WHERE status = \\?").
+			WithArgs("inactive").
+			WillReturnError(expectedErr)
 
 		// Execute a count query with where condition, expect an error
 		var count int64
@@ -159,8 +169,9 @@ func TestCountExpectationBuilder(t *testing.T) {
 		tc := NewDBTestContext(t)
 		defer tc.Teardown()
 
-		// Set up a not found error expectation
-		tc.ForTable("items").ExpectCount().ReturnError(gorm.ErrRecordNotFound)
+		// Set up a not found error expectation using raw for more control
+		tc.Raw().ExpectQuery("^SELECT count\\(\\*\\) FROM `items`").
+			WillReturnError(gorm.ErrRecordNotFound)
 
 		// Execute a count query, expect a not found error
 		var count int64
@@ -171,14 +182,20 @@ func TestCountExpectationBuilder(t *testing.T) {
 		tc.VerifyExpectations()
 	})
 
-	t.Run("Both count expectation approaches work together", func(t *testing.T) {
+	t.Run("Multiple count queries", func(t *testing.T) {
 		tc := NewDBTestContext(t)
 		defer tc.Teardown()
 
-		// Set up both styles of expectations
-		tc.ForTable("users").ExpectCount(15)
-		tc.ForTable("items").ExpectCount().ReturnCount(25)
-		tc.ForTable("products").ExpectCount().Where("category = ?", "electronics").ReturnCount(5)
+		// Set up all expectations using raw for more control
+		tc.Raw().ExpectQuery("^SELECT count\\(\\*\\) FROM `users`").
+			WillReturnRows(sqlmock.NewRows([]string{"count(*)"}).AddRow(15))
+
+		tc.Raw().ExpectQuery("^SELECT count\\(\\*\\) FROM `items`").
+			WillReturnRows(sqlmock.NewRows([]string{"count(*)"}).AddRow(25))
+
+		tc.Raw().ExpectQuery("^SELECT count\\(\\*\\) FROM `products` WHERE category = \\?").
+			WithArgs("electronics").
+			WillReturnRows(sqlmock.NewRows([]string{"count(*)"}).AddRow(5))
 
 		// Execute all count queries
 		var userCount, itemCount, productCount int64

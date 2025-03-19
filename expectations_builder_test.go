@@ -289,3 +289,55 @@ func TestSearchExpectationBuilder_ReturnError(t *testing.T) {
 	// Verify the search expectation was properly configured
 	tc.VerifyExpectations()
 }
+
+// TestSQLPatternMatchingDiagnostics verifies that the SQL pattern matching diagnostics
+// feature works as expected. This test specifically checks that:
+// 1. Diagnostic information is generated when SQL debug mode is enabled
+// 2. Diagnostics include pattern matching details and helpful suggestions
+// 3. The information can be retrieved via GetLastSQLDiagnostics()
+func TestSQLPatternMatchingDiagnostics(t *testing.T) {
+	// Create a test context with SQL debug mode enabled
+	tc := NewDBTestContext(t, WithSQLDebug())
+
+	// Set up expectations that will generate diagnostics
+	rows := sqlmock.NewRows([]string{"id", "username", "email"}).
+		AddRow(1, "test_user", "test@example.com")
+
+	// Create expectations with diagnostic output
+	tc.ForTable("users").
+		ExpectFind().
+		Where("username = ?", "test_user").
+		First().
+		ReturnRows(rows)
+
+	tc.ForTable("users").
+		ExpectFind().
+		Where("email = ?", "test@example.com").
+		ReturnError(errors.New("test error"))
+
+	// Check that diagnostics are generated and stored
+	diagnostics := tc.GetLastSQLDiagnostics()
+	assert.NotEmpty(t, diagnostics, "SQL diagnostics should be generated")
+
+	// Verify diagnostics contain useful information
+	assert.Contains(t, diagnostics, "SQL PATTERN MATCHING DIAGNOSTICS")
+	assert.Contains(t, diagnostics, "Expected pattern:")
+	assert.Contains(t, diagnostics, "Table: users")
+
+	// Verify diagnostics contain helpful suggestions
+	assert.Contains(t, diagnostics, "Common issues and solutions:")
+
+	// Now enable debug on an existing context and test again
+	tc2 := NewDBTestContext(t)
+	tc2.EnableSQLDebug() // Enable debug after creation
+
+	// Set up a similar expectation
+	tc2.ForTable("users").
+		ExpectFind().
+		Where("username = ?", "another_user").
+		ReturnRows(rows)
+
+	// Check that diagnostics were generated
+	diagnostics = tc2.GetLastSQLDiagnostics()
+	assert.NotEmpty(t, diagnostics, "SQL diagnostics should be generated with EnableSQLDebug()")
+}

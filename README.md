@@ -13,6 +13,101 @@ The library properly extends the core Portal testing facilities, providing speci
 
 ## Recent Enhancements
 
+### Specialized Handlers for Complex GORM Queries
+
+The library now provides specialized handlers for complex GORM query patterns that can be challenging to test:
+
+- **HandleStandardFirstRows()**: Precise pattern matching for standard GORM First() queries
+  ```go
+  // This will correctly match the SQL GORM generates for First() with a simple condition
+  tc.ForTable("users").
+      ExpectFind().
+      Where("username = ?", "johndoe").
+      HandleStandardFirstRows(userRows)
+  ```
+
+- **HandleDeletedNotNullRows()**: Special handling for queries that explicitly retrieve soft-deleted records
+  ```go
+  // This will match GORM's Unscoped() queries that look for deleted records
+  tc.ForTable("users").
+      ExpectFind().
+      Where("username = ? AND deleted_at IS NOT NULL", "deleted_user").
+      HandleDeletedNotNullRows(deletedUserRows)
+  ```
+
+- **HandleDeletedAtRows()**: For precise handling of GORM's complex deleted_at conditions
+  ```go
+  // This handles the special case of explicit deleted_at IS NULL conditions
+  tc.ForTable("users").
+      ExpectFind().
+      Where("deleted_at IS NULL").
+      WithDeletedAt().
+      HandleDeletedAtRows(userRows)
+  ```
+
+- **Automatic First() Detection**: The library now better detects GORM's First() patterns even without an explicit First() call
+- **Complex WHERE Clause Support**: Better handling of parenthesized expressions and multiple conditions
+- **Improved Soft Delete Handling**: Better detection and handling of GORM's soft delete conditions
+
+### GORM Model Registration Support
+
+The library now supports registering GORM models for testing, which allows you to use GORM's model-based API in your service code while still being able to use the test framework's high-level expectation builders:
+
+- **Model Registration API**: Register models with `RegisterModel(&models.User{})` or `SetupModels([]interface{}{&models.User{}, &models.Post{}})`
+- **Table Name Extraction**: Table names are automatically extracted from models using GORM's conventions 
+- **TableName() Support**: Models with custom TableName() methods are properly handled
+- **Soft Delete Detection**: Models with GORM's soft delete (DeletedAt field) are automatically detected and handled
+- **Flexible SQL Pattern Matching**: Tests will correctly match GORM's query variations without being brittle
+- **Table Name Resolution**: The test context will properly recognize model references in GORM calls like `db.Model(&models.User{}).Count(&count)`
+- **Compatibility with ForTable()**: After registering models, you can still use `testCtx.ForTable("users").ExpectCount(5)`
+
+**Example Usage:**
+
+```go
+func TestUserService_CountActiveUsers(t *testing.T) {
+    // Create the test context
+    testCtx := testutil.NewDBTestContext(t)
+    defer testCtx.Teardown()
+    
+    // Register a model - this allows test framework to recognize model references
+    testCtx.RegisterModel(&models.User{})
+    
+    // Set up the expectation - table name "users" will be resolved automatically
+    testCtx.ForTable("users").
+        ExpectCount().
+        Where("status = ?", "active").
+        ReturnCount(10)
+    
+    // Create the service with the mocked DB
+    service := NewUserService(testCtx.DB())
+    
+    // Service can use model-based GORM API
+    // This would fail without model registration!
+    count, err := service.CountActiveUsers() // Uses db.Model(&models.User{}).Where(...).Count(&count)
+    
+    // Assertions
+    assert.NoError(t, err)
+    assert.Equal(t, int64(10), count)
+    
+    // Verify all expectations were met
+    testCtx.VerifyExpectations()
+}
+```
+
+With model registration, you can:
+- Write tests with the high-level, expressive ExpectCount and ExpectFind APIs
+- Support service code that uses the `db.Model(&someModel)` pattern
+- Avoid brittle regex-based SQL pattern matching
+- Have proper table prefix support with models
+
+**Helper Methods Added:**
+- `RegisterModel(model interface{})` - Register a single model 
+- `RegisterModels(models ...interface{})` - Register multiple models
+- `SetupModels(models []interface{})` - Register a slice of models
+- `TableNameForModel(model interface{})` - Get the table name for a model
+- `PrefixTableName(table string)` - Apply the configured table prefix to a table name
+- `GetRegisteredTableNames()` - Get a list of all registered table names
+
 ### Enhanced Count Query Support
 
 The library now provides a more flexible interface for setting up count expectations with improved ORM compatibility:
@@ -134,6 +229,16 @@ testCtx := testutil.NewDBTestContext(t,
 
 // Register a service
 testCtx.RegisterService("my_service", myMockService)
+
+// Register GORM models for model-based API support
+testCtx.RegisterModel(&models.User{})
+testCtx.RegisterModels(&models.Post{}, &models.Comment{})
+
+// Get the table name for a model (useful in expectations)
+tableName := testCtx.TableNameForModel(&models.User{}) // "users"
+
+// Apply table prefix to a name
+prefixedName := testCtx.PrefixTableName("users") // "my_prefix_users"
 
 // Verify expectations at the end of the test
 testCtx.VerifyExpectations()
@@ -429,6 +534,66 @@ testutil.RunServiceTests(t, []testutil.ServiceTestCase{
         ExpectResult: myExpectedItem,
     },
 })
+```
+
+### Service Method Test with Model Registration
+
+```go
+func TestUserService_SearchUsers(t *testing.T) {
+    // Create test context
+    testCtx := testutil.NewDBTestContext(t)
+    defer testCtx.Teardown()
+    
+    // Register models - enables model-based GORM API support
+    testCtx.RegisterModel(&models.User{})
+    
+    // Create models to build rows from
+    users := []models.User{
+        {
+            Model:    gorm.Model{ID: 1, CreatedAt: time.Now(), UpdatedAt: time.Now()},
+            Username: "johndoe", 
+            Email:    "john@example.com",
+            Status:   "active",
+        },
+        {
+            Model:    gorm.Model{ID: 2, CreatedAt: time.Now(), UpdatedAt: time.Now()},
+            Username: "janedoe",
+            Email:    "jane@example.com", 
+            Status:   "active",
+        },
+    }
+    
+    // Build rows directly from user models
+    userRows := testCtx.BuildRowsFrom("users", users)
+    
+    // Set up expectation for count query
+    testCtx.ForTable("users")
+        .ExpectCount()
+        .Where("(username LIKE ? OR email LIKE ?) AND status = ?")
+        .ReturnCount(2)
+    
+    // Set up expectation for find query
+    testCtx.ForTable("users")
+        .ExpectFind()
+        .Where("(username LIKE ? OR email LIKE ?) AND status = ?")
+        .ReturnRows(userRows)
+    
+    // Create service
+    service := NewUserService(testCtx.DB())
+    
+    // Execute search method (uses db.Model(&models.User{}) internally)
+    results, total, err := service.SearchUsers("doe", "active")
+    
+    // Assert results
+    assert.NoError(t, err)
+    assert.Equal(t, int64(2), total)
+    assert.Len(t, results, 2)
+    assert.Equal(t, "johndoe", results[0].Username)
+    assert.Equal(t, "janedoe", results[1].Username)
+    
+    // Verify all expectations were met
+    testCtx.VerifyExpectations()
+}
 ```
 
 ### Transaction Test

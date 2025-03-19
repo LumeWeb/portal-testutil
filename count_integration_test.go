@@ -96,6 +96,9 @@ func TestCountIntegration(t *testing.T) {
 		tc := NewDBTestContext(t)
 		defer tc.Teardown()
 
+		// Register the TestItem model so we can detect it's not a soft delete model
+		tc.RegisterModel(&TestItem{})
+
 		// Set up expectations for the count operation with error
 		expectedErr := errors.New("database error during count")
 		tc.ForTable("test_items").ExpectCount().ReturnError(expectedErr)
@@ -197,6 +200,9 @@ func TestModelCountIntegration(t *testing.T) {
 		// Create test context
 		tc := NewDBTestContext(t)
 		defer tc.Teardown()
+
+		// Register the TestItem model so we can detect it's not a soft delete model
+		tc.RegisterModel(&TestItem{})
 
 		// Set up expectations with error
 		expectedErr := errors.New("database count error")
