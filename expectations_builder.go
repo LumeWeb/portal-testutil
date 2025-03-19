@@ -143,11 +143,122 @@ func (b *ExpectationsBuilder) ExpectDeleteError(err error) *ExpectationsBuilder 
 	return b
 }
 
-// ExpectCount expects a count operation
-func (b *ExpectationsBuilder) ExpectCount(count int64) *ExpectationsBuilder {
-	b.tc.mock.ExpectQuery("^SELECT count\\(\\*\\) FROM `" + b.table + "`").
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(count))
-	return b
+// ExpectCount expects a count operation on the table.
+//
+// This method can be used in two ways:
+//
+// 1. Called with a count parameter:
+//
+//	testCtx.ForTable("users").ExpectCount(5)
+//
+// This directly sets up an expectation for a count query and returns the count specified.
+//
+// 2. Called without parameters:
+//
+//	testCtx.ForTable("users").ExpectCount().Where("status = ?", "active").ReturnCount(3)
+//	testCtx.ForTable("users").ExpectCount().ReturnError(fmt.Errorf("database error"))
+//
+// This returns a CountExpectationBuilder for more advanced configuration,
+// allowing you to add WHERE conditions or return specific errors.
+func (b *ExpectationsBuilder) ExpectCount(count ...int64) *CountExpectationBuilder {
+	countBuilder := &CountExpectationBuilder{
+		builder: b,
+		where:   "",
+		args:    []interface{}{},
+	}
+
+	if len(count) > 0 {
+		// For backward compatibility, if a count is provided, set up the expectation directly
+		// but still return the builder for method chaining
+		b.tc.mock.ExpectQuery("^SELECT count\\(\\*\\) FROM `" + b.table + "`").
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(count[0]))
+	}
+
+	return countBuilder
+}
+
+// CountExpectationBuilder builds expectations for a count operation.
+//
+// This builder provides a fluent interface for setting up count query expectations,
+// including support for WHERE conditions and error cases.
+//
+// Example usage:
+//
+//	// Expect a count query with a WHERE condition
+//	testCtx.ForTable("users").ExpectCount().Where("status = ?", "active").ReturnCount(3)
+//
+//	// Expect a count query that returns an error
+//	testCtx.ForTable("users").ExpectCount().ReturnError(fmt.Errorf("database error"))
+//
+//	// Expect a count query with a WHERE condition that returns an error
+//	testCtx.ForTable("users").ExpectCount().Where("region = ?", "unknown").ReturnError(errors.New("region not found"))
+type CountExpectationBuilder struct {
+	builder *ExpectationsBuilder
+	where   string
+	args    []interface{}
+}
+
+// Where adds a WHERE clause to the count expectation.
+//
+// This method allows you to specify conditions for the count query,
+// similar to how you would write a WHERE clause in SQL.
+//
+// Example:
+//
+//	testCtx.ForTable("users").ExpectCount().Where("status = ?", "active").ReturnCount(3)
+//	testCtx.ForTable("products").ExpectCount().Where("category = ? AND price > ?", "electronics", 100).ReturnCount(5)
+func (c *CountExpectationBuilder) Where(where string, args ...interface{}) *CountExpectationBuilder {
+	c.where = where
+	c.args = args
+	return c
+}
+
+// ReturnCount sets the count to return for the count expectation.
+//
+// This method specifies the result that should be returned when the count query is executed.
+//
+// Example:
+//
+//	testCtx.ForTable("users").ExpectCount().ReturnCount(5)
+//	testCtx.ForTable("users").ExpectCount().Where("status = ?", "active").ReturnCount(3)
+func (c *CountExpectationBuilder) ReturnCount(count int64) *ExpectationsBuilder {
+	query := "^SELECT count\\(\\*\\) FROM `" + c.builder.table + "`"
+	if c.where != "" {
+		query += " WHERE " + c.where
+	}
+
+	exp := c.builder.tc.mock.ExpectQuery(query)
+
+	// Add arguments all at once
+	exp = addArgsToExpectation(exp, c.args).(*sqlmock.ExpectedQuery)
+
+	exp.WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(count))
+	return c.builder
+}
+
+// ReturnError sets an error to return for the count expectation.
+//
+// This method allows you to simulate database errors when a count query is executed.
+// It's useful for testing error handling in your code.
+//
+// Example:
+//
+//	testCtx.ForTable("users").ExpectCount().ReturnError(fmt.Errorf("database error"))
+//	testCtx.ForTable("users").ExpectCount().Where("status = ?", "invalid").ReturnError(errors.New("invalid status"))
+//	testCtx.ForTable("users").ExpectCount().ReturnError(gorm.ErrRecordNotFound)
+func (c *CountExpectationBuilder) ReturnError(err error) *ExpectationsBuilder {
+	query := "^SELECT count\\(\\*\\) FROM `" + c.builder.table + "`"
+	if c.where != "" {
+		query += " WHERE " + c.where
+	}
+
+	exp := c.builder.tc.mock.ExpectQuery(query)
+
+	// Add arguments all at once
+	exp = addArgsToExpectation(exp, c.args).(*sqlmock.ExpectedQuery)
+
+	exp.WillReturnError(err)
+	return c.builder
 }
 
 // TransactionExpectationBuilder builds expectations for a transaction

@@ -11,6 +11,83 @@ The library properly extends the core Portal testing facilities, providing speci
 3. **Minimal Boilerplate**: Reduces common testing boilerplate
 4. **Extensibility**: Easily extendable for specific testing needs
 
+## Recent Enhancements
+
+### Enhanced Count Query Support
+
+The library now provides a more flexible interface for setting up count expectations:
+
+- **Basic count expectations** work the same as before: `testCtx.ForTable("users").ExpectCount(5)`
+- **Count with WHERE conditions**: `testCtx.ForTable("users").ExpectCount().Where("status = ?", "active").ReturnCount(3)`
+- **Error handling for count queries**: `testCtx.ForTable("users").ExpectCount().ReturnError(fmt.Errorf("database error"))`
+- **Combined conditions and errors**: `testCtx.ForTable("users").ExpectCount().Where("region = ?", "unknown").ReturnError(errors.New("not found"))`
+
+**Example usage in a test:**
+
+```go
+func TestUserService_CountActiveUsers(t *testing.T) {
+    // Create the test context
+    testCtx := testutil.NewDBTestContext(t)
+    defer testCtx.Teardown()
+    
+    // Set up the expectation with a WHERE condition
+    testCtx.ForTable("users").
+        ExpectCount().
+        Where("status = ?", "active").
+        ReturnCount(10)
+    
+    // Create the service with the mocked DB
+    service := NewUserService(testCtx.DB())
+    
+    // Call the method that executes a count query
+    count, err := service.CountActiveUsers()
+    
+    // Assert the results match the expectation
+    assert.NoError(t, err)
+    assert.Equal(t, int64(10), count)
+    
+    // Verify all expectations were met
+    testCtx.VerifyExpectations()
+}
+
+func TestUserService_CountActiveUsers_Error(t *testing.T) {
+    // Create the test context
+    testCtx := testutil.NewDBTestContext(t)
+    defer testCtx.Teardown()
+    
+    // Set up the expectation with an error
+    expectedErr := errors.New("database connection error")
+    testCtx.ForTable("users").
+        ExpectCount().
+        Where("status = ?", "active").
+        ReturnError(expectedErr)
+    
+    // Create the service with the mocked DB
+    service := NewUserService(testCtx.DB())
+    
+    // Call the method that executes a count query
+    count, err := service.CountActiveUsers()
+    
+    // Assert the error was returned
+    assert.Error(t, err)
+    assert.Equal(t, expectedErr, err)
+    assert.Equal(t, int64(0), count)
+    
+    // Verify all expectations were met
+    testCtx.VerifyExpectations()
+}
+```
+
+### Improved SQLite Version Query Handling
+
+The library now handles SQLite version queries more robustly, preventing false warnings about unmet expectations in test output. This enhancement:
+
+- Automatically handles any format of SQLite version query
+- Suppresses warnings for unmet version query expectations
+- Supports case-insensitive matching for version queries
+
+You don't need to do anything differently - your tests will now run with fewer spurious warnings.
+
 ## Key Components
 
 ### 1. DBTestContext
@@ -49,6 +126,34 @@ testCtx.ForTable("items")
     .ExpectFind()
     .ByID(1)
     .ReturnRows(rows)
+
+// ExpectCount - Several ways to use it:
+
+// 1. Simple count expectation (original style)
+testCtx.ForTable("items")
+    .ExpectCount(5)
+
+// 2. Count with builder and ReturnCount
+testCtx.ForTable("items")
+    .ExpectCount()
+    .ReturnCount(10)
+
+// 3. Count with error simulation
+testCtx.ForTable("items")
+    .ExpectCount()
+    .ReturnError(fmt.Errorf("database error"))
+
+// 4. Count with WHERE condition
+testCtx.ForTable("items")
+    .ExpectCount()
+    .Where("status = ?", "active")
+    .ReturnCount(3)
+
+// 5. Count with WHERE condition and error
+testCtx.ForTable("items")
+    .ExpectCount()
+    .Where("region = ?", "unknown")
+    .ReturnError(errors.New("region not found"))
 ```
 
 ### 3. Validation Testing
