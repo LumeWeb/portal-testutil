@@ -47,7 +47,7 @@ func TestRunTestScenario_Success(t *testing.T) {
 		},
 		Steps: []TestStep{
 			{
-				Name: "Step 1: Do something",
+				Name: "Do something",
 				ExecuteTest: func(ctx interface{}) (interface{}, error) {
 					return "success", nil
 				},
@@ -55,7 +55,7 @@ func TestRunTestScenario_Success(t *testing.T) {
 				ExpectError:  false,
 			},
 			{
-				Name: "Step 2: Do something else",
+				Name: "Do something else",
 				ExecuteTest: func(ctx interface{}) (interface{}, error) {
 					return 42, nil
 				},
@@ -79,7 +79,7 @@ func TestRunTestScenario_WithError(t *testing.T) {
 		Description: "A test scenario with an expected error",
 		Steps: []TestStep{
 			{
-				Name: "Step 1: Do something that succeeds",
+				Name: "Do something that succeeds",
 				ExecuteTest: func(ctx interface{}) (interface{}, error) {
 					return "success", nil
 				},
@@ -87,7 +87,7 @@ func TestRunTestScenario_WithError(t *testing.T) {
 				ExpectError:  false,
 			},
 			{
-				Name: "Step 2: Do something that fails",
+				Name: "Do something that fails",
 				ExecuteTest: func(ctx interface{}) (interface{}, error) {
 					return nil, errors.New("expected error")
 				},

@@ -49,7 +49,7 @@ func RunTestScenario(t *testing.T, scenario TestScenario, opts ...func(*Config))
 
 		// Run each step
 		for i, step := range scenario.Steps {
-			stepName := fmt.Sprintf("Step %d: %s", i+1, step.Name)
+			stepName := fmt.Sprintf("Step%d %s", i+1, step.Name)
 			t.Run(stepName, func(t *testing.T) {
 				// Execute the test
 				result, err := step.ExecuteTest(testCtx)

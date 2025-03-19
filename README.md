@@ -246,9 +246,54 @@ testutil.WithService("my_service", func(m *mock.Mock) {
 })(testCtx)
 ```
 
-### 7. Row Builders and Wrappers
+### 7. Row Builders and BuildRows
 
-Enhanced row builders for creating test data, with SQL-compatible scanning:
+The library provides multiple ways to create mock SQL rows for tests, ranging from manual creation to automatic building from structs and maps.
+
+#### BuildRows - Simplified Row Creation from Go Objects
+
+The `BuildRows` and `BuildRowsFrom` methods on `DBTestContext` make it easy to create mock SQL rows directly from Go structs or maps:
+
+```go
+// Create rows from a map of column values
+reporterRows := testCtx.BuildRows("reporters", map[string]interface{}{
+    "id":         1,
+    "created_at": now,
+    "updated_at": now,
+    "deleted_at": nil,
+    "email":      "reporter1@example.com",
+    "name":       "Reporter One",
+    "user_id":    nil,
+})
+
+// Create rows from a slice of structs with GORM models
+reporterRows := testCtx.BuildRowsFrom("reporters", []models.Reporter{
+    {
+        Model: gorm.Model{ID: 1, CreatedAt: now, UpdatedAt: now},
+        Email: "reporter1@example.com", 
+        Name:  "Reporter One",
+    },
+    {
+        Model: gorm.Model{ID: 2, CreatedAt: now, UpdatedAt: now},
+        Email: "reporter2@example.com",
+        Name:  "Reporter Two",
+    },
+})
+
+// Use the rows in an expectation
+testCtx.ForTable("reporters").ExpectFindAll().ReturnRows(reporterRows)
+```
+
+Key features:
+- Works with maps, structs, or slices of maps/structs
+- Automatically handles GORM models and embedded structs
+- Preserves column names from GORM tags (`column:name`)
+- Converts field names to snake_case when needed
+- Handles nil values properly
+
+#### Manual Row Builders
+
+For more control, you can use the manual row builders directly:
 
 ```go
 // Create model rows with additional fields

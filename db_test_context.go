@@ -19,9 +19,11 @@
 package testutil
 
 import (
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
+	"unicode"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"go.lumeweb.com/portal/core"
@@ -366,4 +368,372 @@ func (tc *DBTestContext) Raw() sqlmock.Sqlmock {
 //	result := testCtx.DB().Model(&User{}).Where("id = ?", 1).First(&user)
 func (tc *DBTestContext) DB() *gorm.DB {
 	return tc.TestContext.DB()
+}
+
+// BuildRows creates mock SQL rows from a map of column values.
+//
+// This method provides a convenient way to create mock database rows from a map
+// where keys are column names and values are column values. It's especially useful
+// for simple, single-row test data.
+//
+// The table parameter is primarily for documentation purposes to indicate which
+// table the rows are meant to represent. It doesn't affect the generated rows.
+//
+// Example:
+//
+//	// Create mock rows for a single reporter
+//	now := time.Now()
+//	rows := testCtx.BuildRows("reporters", map[string]any{
+//		"id":         1,
+//		"created_at": now,
+//		"updated_at": now,
+//		"deleted_at": nil,
+//		"email":      "reporter1@example.com",
+//		"name":       "Reporter One",
+//		"user_id":    nil,
+//	})
+//
+//	// Use in expectations
+//	testCtx.ForTable("reporters").ExpectFind().ByID(1).ReturnRows(rows)
+//
+// Returns:
+//   - A *sqlmock.Rows object that can be used with ExpectationsBuilder.ReturnRows()
+func (tc *DBTestContext) BuildRows(table string, data map[string]any) *sqlmock.Rows {
+	// Extract column names from the map keys
+	columns := make([]string, 0, len(data))
+	for col := range data {
+		columns = append(columns, col)
+	}
+
+	// Create a row builder with the columns
+	builder := NewRowBuilder(columns...)
+
+	// Add a row with the map values
+	return builder.AddRowWithMap(data).Build()
+}
+
+// BuildRowsFrom creates mock SQL rows from structs, maps, or models.
+//
+// This method provides a powerful way to create mock database rows directly from
+// application objects. It significantly reduces boilerplate in tests by automatically
+// extracting column names and values from Go objects.
+//
+// # Features
+//
+// BuildRowsFrom supports:
+//   - Single structs or maps
+//   - Slices of structs or maps
+//   - GORM models with embedded gorm.Model
+//   - Struct field tags for custom column names
+//   - Nil pointers and nullable fields
+//
+// # How It Works
+//
+// The function uses reflection to:
+//   - Extract field values from structs
+//   - Handle embedded fields (like gorm.Model)
+//   - Process tags for column names (gorm:"column:name" or json:"name")
+//   - Convert field names to snake_case if no tags are present
+//
+// # Usage Examples
+//
+// Example with GORM models:
+//
+//	// Create rows from a slice of model structs
+//	rows := testCtx.BuildRowsFrom("reporters", []models.Reporter{
+//		{
+//			Model: gorm.Model{ID: 1, CreatedAt: now, UpdatedAt: now},
+//			Email: "reporter1@example.com",
+//			Name:  "Reporter One",
+//		},
+//		{
+//			Model: gorm.Model{ID: 2, CreatedAt: now, UpdatedAt: now},
+//			Email: "reporter2@example.com",
+//			Name:  "Reporter Two",
+//		},
+//	})
+//
+// Example with a single struct:
+//
+//	// Create rows from a single struct
+//	row := testCtx.BuildRowsFrom("user", user)
+//
+// Example with a slice of maps:
+//
+//	// Create rows from multiple maps
+//	rows := testCtx.BuildRowsFrom("items", []map[string]any{
+//		{"id": 1, "name": "Item 1", "price": 10.99},
+//		{"id": 2, "name": "Item 2", "price": 20.99},
+//	})
+//
+// The table parameter is primarily for documentation purposes to indicate which
+// table the rows are meant to represent. It doesn't affect the generated rows.
+//
+// # Tags Support
+//
+// The function recognizes both GORM and JSON tags:
+//   - GORM: `gorm:"column:custom_name"`
+//   - JSON: `json:"custom_name"`
+//
+// If no tags are present, field names are converted to snake_case.
+//
+// # Return Value
+//
+// Returns a *sqlmock.Rows object that can be used with ExpectationsBuilder.ReturnRows().
+// For unsupported input types or empty slices, returns an empty *sqlmock.Rows.
+func (tc *DBTestContext) BuildRowsFrom(table string, models any) *sqlmock.Rows {
+	// For nil models, return an empty result
+	if models == nil {
+		return sqlmock.NewRows([]string{})
+	}
+
+	// Use reflection to get the type of the models
+	modelsVal := reflect.ValueOf(models)
+
+	// Handle different kinds of input
+	switch modelsVal.Kind() {
+	case reflect.Slice:
+		// For empty slices, return empty rows
+		if modelsVal.Len() == 0 {
+			return sqlmock.NewRows([]string{})
+		}
+
+		// Get the first element to determine the structure
+		firstModel := modelsVal.Index(0)
+
+		// If the slice contains maps, handle them specially
+		if firstModel.Kind() == reflect.Map {
+			return tc.buildRowsFromMaps(table, models)
+		}
+
+		// Otherwise, assume it's a slice of structs
+		return tc.buildRowsFromStructs(table, models)
+
+	case reflect.Struct:
+		// Single struct - wrap in a slice and process
+		sliceType := reflect.SliceOf(modelsVal.Type())
+		slice := reflect.MakeSlice(sliceType, 1, 1)
+		slice.Index(0).Set(modelsVal)
+		return tc.buildRowsFromStructs(table, slice.Interface())
+
+	case reflect.Map:
+		// Single map - handle it directly
+		if mapValue, ok := modelsVal.Interface().(map[string]any); ok {
+			return tc.BuildRows(table, mapValue)
+		}
+		if tc.T() != nil {
+			tc.T().Logf("Warning: unsupported map type for BuildRowsFrom: %v", modelsVal.Type())
+		}
+		return sqlmock.NewRows([]string{})
+
+	default:
+		// For unsupported types, return an empty result
+		if tc.T() != nil {
+			tc.T().Logf("Warning: unsupported type for BuildRowsFrom: %v", modelsVal.Type())
+		}
+		return sqlmock.NewRows([]string{})
+	}
+}
+
+// buildRowsFromStructs creates mock SQL rows from a slice of structs.
+//
+// This internal helper function:
+// 1. Takes a slice of structs (or a single struct wrapped in a slice)
+// 2. Extracts the field names and creates column names from tags or snake_case
+// 3. Extracts values from each struct to create rows
+// 4. Handles embedded structs (like gorm.Model)
+func (tc *DBTestContext) buildRowsFromStructs(table string, models any) *sqlmock.Rows {
+	modelsVal := reflect.ValueOf(models)
+
+	// Must be a slice with at least one element
+	if modelsVal.Kind() != reflect.Slice || modelsVal.Len() == 0 {
+		return sqlmock.NewRows([]string{})
+	}
+
+	// Get the first model to determine structure and field names
+	firstModel := modelsVal.Index(0)
+	firstModelType := firstModel.Type()
+
+	// Extract column names from the struct fields
+	columns := make([]string, 0)
+	fieldIndices := make(map[string][]int)
+
+	// Process all fields, including embedded ones
+	tc.extractFieldNames(firstModelType, []int{}, &columns, fieldIndices)
+
+	// Create a row builder with the columns
+	builder := NewRowBuilder(columns...)
+
+	// For each model, extract the values and add as a row
+	for i := 0; i < modelsVal.Len(); i++ {
+		model := modelsVal.Index(i)
+		values := make(map[string]any)
+
+		// For each column, find the corresponding field value
+		for _, col := range columns {
+			indices, ok := fieldIndices[col]
+			if !ok {
+				values[col] = nil
+				continue
+			}
+
+			// Follow the indices to get the field
+			field := model
+			for _, idx := range indices {
+				if field.Kind() == reflect.Ptr && !field.IsNil() {
+					field = field.Elem()
+				}
+				field = field.Field(idx)
+			}
+
+			// Handle different field types
+			if field.Kind() == reflect.Ptr {
+				if field.IsNil() {
+					values[col] = nil
+				} else {
+					values[col] = field.Elem().Interface()
+				}
+			} else {
+				values[col] = field.Interface()
+			}
+		}
+
+		builder.AddRowWithMap(values)
+	}
+
+	return builder.Build()
+}
+
+// buildRowsFromMaps creates mock SQL rows from a slice of maps.
+//
+// This internal helper function:
+// 1. Takes a slice of maps (or a single map)
+// 2. Extracts the keys from the first map to determine column names
+// 3. Uses map values to populate rows
+// 4. Creates a properly formatted sqlmock.Rows object
+func (tc *DBTestContext) buildRowsFromMaps(table string, models any) *sqlmock.Rows {
+	modelsVal := reflect.ValueOf(models)
+
+	// Must be a slice
+	if modelsVal.Kind() != reflect.Slice || modelsVal.Len() == 0 {
+		return sqlmock.NewRows([]string{})
+	}
+
+	// Get the first map to determine the columns
+	firstMap := modelsVal.Index(0).Interface().(map[string]any)
+
+	// Extract column names from the map keys
+	columns := make([]string, 0, len(firstMap))
+	for col := range firstMap {
+		columns = append(columns, col)
+	}
+
+	// Create a row builder with the columns
+	builder := NewRowBuilder(columns...)
+
+	// For each map, add its values as a row
+	for i := 0; i < modelsVal.Len(); i++ {
+		mapVal := modelsVal.Index(i).Interface().(map[string]any)
+		builder.AddRowWithMap(mapVal)
+	}
+
+	return builder.Build()
+}
+
+// extractFieldNames extracts column names from struct fields, handling embedded structs.
+//
+// This internal helper function recursively processes a struct type and:
+// 1. Handles embedded structs by recursively extracting their fields
+// 2. Extracts column names from GORM tags, JSON tags, or field names
+// 3. Keeps track of the path to each field for later value extraction
+// 4. Handles complex nested structures with proper path tracking
+//
+// The function builds both:
+// - A list of column names in the columns slice
+// - A mapping from column names to field paths in the fieldIndices map
+func (tc *DBTestContext) extractFieldNames(t reflect.Type, path []int, columns *[]string, fieldIndices map[string][]int) {
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+
+		// Create a new path that includes the current field
+		newPath := append(append([]int{}, path...), i)
+
+		if field.Anonymous {
+			// Handle embedded structs (like gorm.Model)
+			fieldType := field.Type
+			if fieldType.Kind() == reflect.Ptr {
+				fieldType = fieldType.Elem()
+			}
+			if fieldType.Kind() == reflect.Struct {
+				tc.extractFieldNames(fieldType, newPath, columns, fieldIndices)
+			}
+			continue
+		}
+
+		// Get column name from tags or field name
+		colName := field.Tag.Get("gorm")
+		if colName == "" || colName == "-" {
+			// Try JSON tag if GORM tag isn't available
+			colName = field.Tag.Get("json")
+			if colName == "" || colName == "-" {
+				// Use field name as a fallback, converting to snake_case
+				colName = toSnakeCase(field.Name)
+			} else {
+				// Handle JSON tag options like `json:"name,omitempty"`
+				colName = strings.Split(colName, ",")[0]
+			}
+		} else {
+			// Handle GORM tag options like `gorm:"column:name;type:varchar(255)"`
+			if strings.Contains(colName, "column:") {
+				parts := strings.Split(colName, ";")
+				for _, part := range parts {
+					if strings.HasPrefix(part, "column:") {
+						colName = strings.TrimPrefix(part, "column:")
+						break
+					}
+				}
+			} else {
+				colName = toSnakeCase(field.Name)
+			}
+		}
+
+		// Add column to the list if not already there
+		if colName != "" {
+			found := false
+			for _, col := range *columns {
+				if col == colName {
+					found = true
+					break
+				}
+			}
+			if !found {
+				*columns = append(*columns, colName)
+				fieldIndices[colName] = newPath
+			}
+		}
+	}
+}
+
+// toSnakeCase converts a camelCase string to snake_case.
+//
+// This function takes a CamelCase field name and converts it to snake_case,
+// which is the conventional format for database column names in many ORMs
+// including GORM.
+//
+// Special handling is included for common field names:
+// - "ID" becomes "id" (not "i_d")
+func toSnakeCase(s string) string {
+	// Special case for common field names
+	if s == "ID" {
+		return "id" // Ensure ID is always lowercase
+	}
+
+	var result strings.Builder
+	for i, c := range s {
+		if i > 0 && c >= 'A' && c <= 'Z' {
+			result.WriteRune('_')
+		}
+		result.WriteRune(unicode.ToLower(c))
+	}
+	return result.String()
 }
