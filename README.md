@@ -1,6 +1,6 @@
 # Portal Testing Library
 
-This package provides a comprehensive testing framework for GORM-backed services in the portal ecosystem. It is designed to simplify testing by providing a fluent interface for building SQL expectations and a registry pattern for mock services.
+This package provides a comprehensive testing framework for database-backed services in the portal ecosystem. It is designed to simplify testing by providing a fluent interface for building SQL expectations and a registry pattern for mock services.
 
 ## Architecture
 
@@ -15,12 +15,20 @@ The library properly extends the core Portal testing facilities, providing speci
 
 ### Enhanced Count Query Support
 
-The library now provides a more flexible interface for setting up count expectations:
+The library now provides a more flexible interface for setting up count expectations with improved ORM compatibility:
 
 - **Basic count expectations** work the same as before: `testCtx.ForTable("users").ExpectCount(5)`
 - **Count with WHERE conditions**: `testCtx.ForTable("users").ExpectCount().Where("status = ?", "active").ReturnCount(3)`
 - **Error handling for count queries**: `testCtx.ForTable("users").ExpectCount().ReturnError(fmt.Errorf("database error"))`
 - **Combined conditions and errors**: `testCtx.ForTable("users").ExpectCount().Where("region = ?", "unknown").ReturnError(errors.New("not found"))`
+- **ORM compatibility by default**: All count queries now return data in the format expected by most ORMs (with a `count(*)` column name)
+- **Backward compatibility option**: For older code, use `WithColumnName("count")` to retain the old column name format
+
+**Key improvements:**
+- By default, count queries now use the column name `count(*)` that most ORMs expect, eliminating scan errors
+- Fixed the scan errors when using Model().Count() query patterns
+- Added options to specify custom column names for specialized use cases
+- Comprehensive test coverage for both compatibility modes
 
 **Example usage in a test:**
 
@@ -31,6 +39,7 @@ func TestUserService_CountActiveUsers(t *testing.T) {
     defer testCtx.Teardown()
     
     // Set up the expectation with a WHERE condition
+    // Works with both Model().Count() and Table().Count() patterns
     testCtx.ForTable("users").
         ExpectCount().
         Where("status = ?", "active").
@@ -47,6 +56,26 @@ func TestUserService_CountActiveUsers(t *testing.T) {
     assert.Equal(t, int64(10), count)
     
     // Verify all expectations were met
+    testCtx.VerifyExpectations()
+}
+
+// For backward compatibility with older code
+func TestLegacyCode_CountActiveUsers(t *testing.T) {
+    testCtx := testutil.NewDBTestContext(t)
+    defer testCtx.Teardown()
+    
+    // Use WithColumnName option to specify "count" instead of "count(*)"
+    testCtx.ForTable("users").
+        ExpectCount(WithColumnName("count")).
+        Where("status = ?", "active").
+        ReturnCount(10)
+    
+    // Service that uses older SQL driver or custom query that expects "count" column
+    service := NewLegacyService(testCtx.DB())
+    count, err := service.CountActiveUsers()
+    
+    assert.NoError(t, err)
+    assert.Equal(t, int64(10), count)
     testCtx.VerifyExpectations()
 }
 
@@ -129,27 +158,36 @@ testCtx.ForTable("items")
 
 // ExpectCount - Several ways to use it:
 
-// 1. Simple count expectation (original style)
+// 1. Simple count expectation (original style, now GORM-compatible by default)
 testCtx.ForTable("items")
     .ExpectCount(5)
 
-// 2. Count with builder and ReturnCount
+// 2. Simple count with custom column name (for backward compatibility)
+testCtx.ForTable("items")
+    .ExpectCount(5, WithColumnName("count"))
+
+// 3. Count with builder and ReturnCount
 testCtx.ForTable("items")
     .ExpectCount()
     .ReturnCount(10)
 
-// 3. Count with error simulation
+// 4. Count with custom column name 
+testCtx.ForTable("items")
+    .ExpectCount(WithColumnName("cnt"))
+    .ReturnCount(10)
+
+// 5. Count with error simulation
 testCtx.ForTable("items")
     .ExpectCount()
     .ReturnError(fmt.Errorf("database error"))
 
-// 4. Count with WHERE condition
+// 6. Count with WHERE condition
 testCtx.ForTable("items")
     .ExpectCount()
     .Where("status = ?", "active")
     .ReturnCount(3)
 
-// 5. Count with WHERE condition and error
+// 7. Count with WHERE condition and error
 testCtx.ForTable("items")
     .ExpectCount()
     .Where("region = ?", "unknown")

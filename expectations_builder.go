@@ -143,35 +143,105 @@ func (b *ExpectationsBuilder) ExpectDeleteError(err error) *ExpectationsBuilder 
 	return b
 }
 
+// CountOption defines options for the ExpectCount method.
+// Options allow for customizing the behavior of count expectations.
+type CountOption func(*CountExpectationBuilder)
+
+// WithColumnName sets the column name to use for count results.
+//
+// By default, ExpectCount uses "count(*)" as the column name to match what
+// most modern ORM frameworks expect. However, some older code might expect
+// a different column name like "count" (without the asterisk).
+//
+// Example:
+//
+//	// Use "count" for backward compatibility
+//	testCtx.ForTable("users").ExpectCount(5, WithColumnName("count"))
+//
+//	// Use a custom column name
+//	testCtx.ForTable("users").ExpectCount(WithColumnName("cnt")).ReturnCount(10)
+func WithColumnName(name string) CountOption {
+	return func(c *CountExpectationBuilder) {
+		c.columnName = name
+	}
+}
+
 // ExpectCount expects a count operation on the table.
 //
-// This method can be used in two ways:
+// This method can be used in multiple ways:
 //
-// 1. Called with a count parameter:
+// 1. Called with a count parameter (supports both int and int64):
 //
 //	testCtx.ForTable("users").ExpectCount(5)
 //
 // This directly sets up an expectation for a count query and returns the count specified.
 //
-// 2. Called without parameters:
+// 2. Called with a count parameter and options:
+//
+//	testCtx.ForTable("users").ExpectCount(5, WithColumnName("count"))
+//
+// This sets up an expectation with the specified count and customized options.
+//
+// 3. Called with only options:
+//
+//	testCtx.ForTable("users").ExpectCount(WithColumnName("cnt")).ReturnCount(3)
+//
+// This allows customizing the behavior before specifying the count.
+//
+// 4. Called without parameters for advanced configuration:
 //
 //	testCtx.ForTable("users").ExpectCount().Where("status = ?", "active").ReturnCount(3)
 //	testCtx.ForTable("users").ExpectCount().ReturnError(fmt.Errorf("database error"))
 //
-// This returns a CountExpectationBuilder for more advanced configuration,
+// This returns a CountExpectationBuilder for advanced configuration,
 // allowing you to add WHERE conditions or return specific errors.
-func (b *ExpectationsBuilder) ExpectCount(count ...int64) *CountExpectationBuilder {
-	countBuilder := &CountExpectationBuilder{
-		builder: b,
-		where:   "",
-		args:    []interface{}{},
+//
+// By default, it uses "count(*)" as the column name to be compatible with most ORM frameworks.
+// For backward compatibility with older code, you can use WithColumnName("count") to use the
+// previous behavior.
+func (b *ExpectationsBuilder) ExpectCount(countOrOptions ...interface{}) *CountExpectationBuilder {
+	// Default column name for compatibility with modern ORM frameworks
+	columnName := "count(*)"
+	var count *int64 = nil
+
+	// Process arguments
+	for _, arg := range countOrOptions {
+		switch v := arg.(type) {
+		case int64:
+			// Got a count value
+			value := v
+			count = &value
+		case int:
+			// Got a count value as int, convert to int64
+			value := int64(v)
+			count = &value
+		case CountOption:
+			// Got an option function, apply it after creating the builder
+			// Store it to apply later
+			countBuilder := &CountExpectationBuilder{
+				builder:    b,
+				where:      "",
+				args:       []interface{}{},
+				columnName: columnName,
+			}
+			// Apply the option
+			v(countBuilder)
+			columnName = countBuilder.columnName
+		}
 	}
 
-	if len(count) > 0 {
+	countBuilder := &CountExpectationBuilder{
+		builder:    b,
+		where:      "",
+		args:       []interface{}{},
+		columnName: columnName,
+	}
+
+	if count != nil {
 		// For backward compatibility, if a count is provided, set up the expectation directly
 		// but still return the builder for method chaining
 		b.tc.mock.ExpectQuery("^SELECT count\\(\\*\\) FROM `" + b.table + "`").
-			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(count[0]))
+			WillReturnRows(sqlmock.NewRows([]string{columnName}).AddRow(*count))
 	}
 
 	return countBuilder
@@ -180,7 +250,7 @@ func (b *ExpectationsBuilder) ExpectCount(count ...int64) *CountExpectationBuild
 // CountExpectationBuilder builds expectations for a count operation.
 //
 // This builder provides a fluent interface for setting up count query expectations,
-// including support for WHERE conditions and error cases.
+// including support for WHERE conditions, error cases, and customized column names.
 //
 // Example usage:
 //
@@ -192,10 +262,20 @@ func (b *ExpectationsBuilder) ExpectCount(count ...int64) *CountExpectationBuild
 //
 //	// Expect a count query with a WHERE condition that returns an error
 //	testCtx.ForTable("users").ExpectCount().Where("region = ?", "unknown").ReturnError(errors.New("region not found"))
+//
+//	// Specify a custom column name for the count result (for backward compatibility)
+//	testCtx.ForTable("users").ExpectCount(WithColumnName("count")).ReturnCount(5)
+//
+//	// Combine options with WHERE conditions
+//	testCtx.ForTable("users").
+//	    ExpectCount(WithColumnName("count")).
+//	    Where("status = ?", "active").
+//	    ReturnCount(3)
 type CountExpectationBuilder struct {
-	builder *ExpectationsBuilder
-	where   string
-	args    []interface{}
+	builder    *ExpectationsBuilder
+	where      string
+	args       []interface{}
+	columnName string // Column name for the count result (defaults to "count(*)" for ORM compatibility)
 }
 
 // Where adds a WHERE clause to the count expectation.
@@ -216,11 +296,25 @@ func (c *CountExpectationBuilder) Where(where string, args ...interface{}) *Coun
 // ReturnCount sets the count to return for the count expectation.
 //
 // This method specifies the result that should be returned when the count query is executed.
+// The count value will be returned in the column specified by WithColumnName, or in the
+// default "count(*)" column if not specified.
 //
 // Example:
 //
+//	// Basic count query
 //	testCtx.ForTable("users").ExpectCount().ReturnCount(5)
+//
+//	// Count with WHERE condition
 //	testCtx.ForTable("users").ExpectCount().Where("status = ?", "active").ReturnCount(3)
+//
+//	// Count with custom column name (e.g., for backward compatibility)
+//	testCtx.ForTable("users").ExpectCount(WithColumnName("count")).ReturnCount(5)
+//
+//	// Count with WHERE condition and custom column name
+//	testCtx.ForTable("users").
+//	    ExpectCount(WithColumnName("cnt")).
+//	    Where("status = ?", "active").
+//	    ReturnCount(3)
 func (c *CountExpectationBuilder) ReturnCount(count int64) *ExpectationsBuilder {
 	query := "^SELECT count\\(\\*\\) FROM `" + c.builder.table + "`"
 	if c.where != "" {
@@ -232,20 +326,35 @@ func (c *CountExpectationBuilder) ReturnCount(count int64) *ExpectationsBuilder 
 	// Add arguments all at once
 	exp = addArgsToExpectation(exp, c.args).(*sqlmock.ExpectedQuery)
 
-	exp.WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(count))
+	// Use the specified column name (defaults to "count(*)" for GORM compatibility)
+	exp.WillReturnRows(sqlmock.NewRows([]string{c.columnName}).AddRow(count))
 	return c.builder
 }
 
 // ReturnError sets an error to return for the count expectation.
 //
 // This method allows you to simulate database errors when a count query is executed.
-// It's useful for testing error handling in your code.
+// It's useful for testing error handling in your code, including error conditions
+// like "record not found" or connection errors.
 //
 // Example:
 //
+//	// Basic error simulation
 //	testCtx.ForTable("users").ExpectCount().ReturnError(fmt.Errorf("database error"))
-//	testCtx.ForTable("users").ExpectCount().Where("status = ?", "invalid").ReturnError(errors.New("invalid status"))
+//
+//	// Error with WHERE condition
+//	testCtx.ForTable("users").
+//	    ExpectCount().
+//	    Where("status = ?", "invalid").
+//	    ReturnError(errors.New("invalid status"))
+//
+//	// Return specific ORM errors
 //	testCtx.ForTable("users").ExpectCount().ReturnError(gorm.ErrRecordNotFound)
+//
+//	// Error with custom column name
+//	testCtx.ForTable("users").
+//	    ExpectCount(WithColumnName("count")).
+//	    ReturnError(errors.New("db error"))
 func (c *CountExpectationBuilder) ReturnError(err error) *ExpectationsBuilder {
 	query := "^SELECT count\\(\\*\\) FROM `" + c.builder.table + "`"
 	if c.where != "" {
@@ -529,7 +638,7 @@ func (s *SearchExpectationBuilder) ReturnCount(count int64) *SearchExpectationBu
 	// Build the WHERE clause for the search
 	whereClause := s.buildWhereClause()
 
-	// Setup count expectation
+	// Setup count expectation with "count(*)" as column name for ORM compatibility
 	s.builder.tc.mock.ExpectQuery(fmt.Sprintf("SELECT count\\(\\*\\) FROM `%s` WHERE %s", s.builder.table, whereClause)).
 		WillReturnRows(sqlmock.NewRows([]string{"count(*)"}).AddRow(count))
 

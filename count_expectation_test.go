@@ -25,6 +25,22 @@ func TestCountExpectationBuilder(t *testing.T) {
 		tc.VerifyExpectations()
 	})
 
+	t.Run("ExpectCount with direct count using int argument", func(t *testing.T) {
+		tc := NewDBTestContext(t)
+		defer tc.Teardown()
+
+		// Use the direct count approach with int argument
+		tc.ForTable("items").ExpectCount(5)
+
+		// Execute a count query
+		var count int64
+		result := tc.DB().Table("items").Count(&count)
+		assert.NoError(t, result.Error)
+		assert.Equal(t, int64(5), count)
+
+		tc.VerifyExpectations()
+	})
+
 	t.Run("ExpectCount with builder ReturnCount", func(t *testing.T) {
 		tc := NewDBTestContext(t)
 		defer tc.Teardown()
@@ -37,6 +53,38 @@ func TestCountExpectationBuilder(t *testing.T) {
 		result := tc.DB().Table("items").Count(&count)
 		assert.NoError(t, result.Error)
 		assert.Equal(t, int64(10), count)
+
+		tc.VerifyExpectations()
+	})
+
+	t.Run("ExpectCount with custom column name", func(t *testing.T) {
+		tc := NewDBTestContext(t)
+		defer tc.Teardown()
+
+		// Use custom column name for backward compatibility
+		tc.ForTable("items").ExpectCount(WithColumnName("count")).ReturnCount(15)
+
+		// Execute a count query
+		var count int64
+		result := tc.DB().Table("items").Count(&count)
+		assert.NoError(t, result.Error)
+		assert.Equal(t, int64(15), count)
+
+		tc.VerifyExpectations()
+	})
+
+	t.Run("ExpectCount with direct count and custom column name", func(t *testing.T) {
+		tc := NewDBTestContext(t)
+		defer tc.Teardown()
+
+		// Use the direct count approach with custom column name
+		tc.ForTable("items").ExpectCount(5, WithColumnName("count"))
+
+		// Execute a count query
+		var count int64
+		result := tc.DB().Table("items").Count(&count)
+		assert.NoError(t, result.Error)
+		assert.Equal(t, int64(5), count)
 
 		tc.VerifyExpectations()
 	})
@@ -64,6 +112,22 @@ func TestCountExpectationBuilder(t *testing.T) {
 
 		// Set up a count with where condition
 		tc.ForTable("items").ExpectCount().Where("status = ?", "active").ReturnCount(3)
+
+		// Execute a count query with where condition
+		var count int64
+		result := tc.DB().Table("items").Where("status = ?", "active").Count(&count)
+		assert.NoError(t, result.Error)
+		assert.Equal(t, int64(3), count)
+
+		tc.VerifyExpectations()
+	})
+
+	t.Run("ExpectCount with Where condition and custom column name", func(t *testing.T) {
+		tc := NewDBTestContext(t)
+		defer tc.Teardown()
+
+		// Set up a count with where condition and custom column name
+		tc.ForTable("items").ExpectCount(WithColumnName("count")).Where("status = ?", "active").ReturnCount(3)
 
 		// Execute a count query with where condition
 		var count int64
