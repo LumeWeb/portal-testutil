@@ -10,6 +10,111 @@ The library properly extends the core Portal testing facilities, providing speci
 2. **Fluent Interfaces**: Builder patterns for expressive test setups 
 3. **Minimal Boilerplate**: Reduces common testing boilerplate
 4. **Extensibility**: Easily extendable for specific testing needs
+5. **Type Safety**: Uses Go generics for improved type safety and developer experience
+
+## Generic Testing Utilities
+
+The library now provides generic test utilities for improved type safety and developer experience:
+
+### Type-Safe Service Testing
+
+```go
+// Create a test context
+tc := NewDBTestContext(t)
+defer tc.Teardown()
+
+// Create and register a service with type safety
+service := CreateAndRegisterService[*UserService](tc, "user_service")
+
+// Access the service directly with proper typing
+result, err := service.GetUser(1)
+
+// Or get the service from the context with type safety
+userService := GetService[*UserService](tc, "user_service")
+```
+
+### Service Initialization Flexibility
+
+Services can receive test dependencies in two ways:
+
+1. **Reflection-based field setting** (works with exported fields)
+```go
+type TestService struct {
+    Ctx    *DBTestContext
+    Db     *gorm.DB
+    Logger *core.Logger
+}
+```
+
+2. **Interface-based initialization** (works with any field naming)
+```go
+type MyService struct {
+    ctx    *DBTestContext // unexported fields
+    db     *gorm.DB
+    logger *core.Logger
+}
+
+// Implement ServiceInitializer for testing
+func (s *MyService) InitForTest(tc *DBTestContext, db *gorm.DB, logger *core.Logger) {
+    s.ctx = tc
+    s.db = db
+    s.logger = logger
+}
+```
+
+### Automatic Model Relationship Registration
+
+```go
+// Register models with auto-discovery of relationships
+RegisterModelWithRelationships[UserModel](tc)
+
+// Models related to UserModel (e.g., Profile, Post) are automatically registered
+```
+
+### Transaction Pattern Helpers
+
+```go
+// Simplified transaction expectation setup
+ExpectServiceTransaction(tc, ServiceTransactionOptions{
+    TableName:    "users",
+    FindID:       1,
+    CreateID:     2,
+    ExpectUpdate: true,
+    RowBuilder:   func() *sqlmock.Rows { return UserRowBuilder() },
+})
+```
+
+### TestSuite for Organized Testing
+
+```go
+// Create a typed test suite
+suite := NewTestSuite[*UserService](t, "user_service")
+defer suite.Teardown()
+
+// Register mocks
+mockDep := new(MockDependency)
+mockDep.On("GetData").Return("test data", nil)
+suite.RegisterMock("dependency_service", mockDep)
+
+// Test the service using the type-safe reference
+result, err := suite.ServiceUnderTest.DoSomething()
+```
+
+### Standardized Logger Creation
+
+```go
+// Create a standardized test logger
+logger := NewTestLogger() // Returns a properly configured core.Logger
+```
+
+## Benefits
+
+- **Type Safety**: Compile-time checking of service types
+- **Developer Experience**: Enhanced IDE code completion and refactoring support
+- **Flexible Initialization**: Support for both exported and unexported fields
+- **Reduced Boilerplate**: Less setup code in tests
+- **Automatic Relationship Discovery**: Models and their relationships registered automatically
+- **Standardized Patterns**: Consistent approach to service testing
 
 ## Recent Enhancements
 

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.7 (2025-03-20)
+
+### Added
+- Added generic test utilities for improved type safety and developer experience:
+  - `CreateAndRegisterService[T]`: Type-safe service creation and registration
+  - `GetService[T]`: Type-safe service retrieval without type assertions
+  - `RegisterModelWithRelationships[T]`: Automatic discovery and registration of related models
+  - `TestSuite[T]`: Reusable test suite structure with typed service access
+  - `ServiceInitializer` interface for flexible service initialization
+  - `ExpectServiceTransaction` for simplified transaction expectation setup
+  - `NewTestLogger` for standardized logger creation
+- Enhanced documentation with extensive examples for all generic utilities
+
 ## 0.1.6 (2025-03-20)
 
 ### Added
