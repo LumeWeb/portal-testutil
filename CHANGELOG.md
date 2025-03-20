@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.1 (2025-03-20)
+
+### Fixed
+- Fixed regression in v0.2.0 where table name resolution still failed in certain transaction scenarios:
+  - Enhanced table name resolution for map values in transactions
+  - Fixed "Table not set" error when using RegisterModelWithRelationships with custom TableName models
+  - Added support for extracting table name from GORM's Statement.Dest field
+  - Improved transaction wrapper to handle model-less operations
+- Eliminated GORM callback warnings by implementing precise callback tracking:
+  - Added unique session ID for each transaction helper instance
+  - Implemented tracking of registered callbacks by name and active state
+  - Added callback removal that only removes callbacks actually registered
+  - Prevented duplicate callback warnings with unique callback naming scheme
+  - Added comprehensive test suite for callback tracking functionality
+- Added extensive documentation for all enhancements in README, godocs, and CHANGELOG
+
 ## 0.2.0 (2025-03-20)
 
 ### Added

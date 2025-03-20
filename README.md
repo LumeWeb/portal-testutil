@@ -118,9 +118,36 @@ logger := NewTestLogger() // Returns a properly configured core.Logger
 
 ## Recent Enhancements
 
-### Fixed Transaction Table Resolution with Custom TableName() Methods
+### Improved Transaction Table Resolution for All GORM Operations (v0.2.1)
 
-The library now correctly resolves table names in transactions when using models with custom TableName() methods. This fixes the "Table not set" error that could occur when using models within transactions in tests.
+The v0.2.1 update further enhances transaction table name resolution to work in all GORM scenarios.
+This fixes remaining edge cases where "Table not set" errors could still occur in transactions when:
+1. Using RegisterModelWithRelationships with custom TableName() methods
+2. Working with map values in Create operations
+3. Handling complex transaction scenarios with model info in Statement.Dest
+
+Key improvements:
+- Enhanced table name resolution for map values in transactions
+- Fixed table resolution with RegisterModelWithRelationships
+- Added support for extracting table name from Statement.Dest field
+- Improved transaction wrapper to handle model-less operations
+- Added comprehensive test suite for all edge cases
+
+### Eliminated GORM Callback Warnings (v0.2.1)
+
+The v0.2.1 update implements a sophisticated callback tracking system that eliminates the GORM
+warning messages about duplicate or missing callbacks that could appear in test logs:
+
+Key improvements:
+- Added unique session ID for each transaction helper instance
+- Implemented precise tracking of registered callbacks by name
+- Added callback removal that only removes callbacks that were registered
+- Prevented duplicate callback warnings with unique naming scheme
+- Added unit tests for callback tracking functionality
+
+### Fixed Transaction Table Resolution with Custom TableName() Methods (v0.2.0)
+
+The v0.2.0 library correctly resolves table names in transactions when using models with custom TableName() methods. This fixes the "Table not set" error that could occur when using models within transactions in tests.
 
 Key improvements:
 - Properly resolves table names from both pointer receiver (`func (*Model) TableName()`) and value receiver (`func (Model) TableName()`) implementations
@@ -140,6 +167,20 @@ err := testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
     // This will work even if MyModel has a TableName() method
     return tx.Create(model).Error
 })
+
+// New in v0.2.1: Works with RegisterModelWithRelationships
+RegisterModelWithRelationships[MyModel](testCtx)
+err = testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
+    return tx.Create(&MyModel{Name: "test"}).Error
+})
+
+// New in v0.2.1: Works with map values in Create operations
+err = testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
+    values := map[string]interface{}{"name": "test"}
+    return tx.Model(&MyModel{}).Create(values).Error
+})
+
+// No more warning messages in test output thanks to the improved callback tracking!
 ```
 
 ### Consistent ExpectInsert/ExpectCreate API with Transaction Handling
@@ -653,7 +694,7 @@ validator.AssertNumericRange(validateAge, "age", 18, 120)
 
 ### 4. Transaction Testing
 
-Enhanced transaction testing capabilities:
+Enhanced transaction testing capabilities with robust table name resolution:
 
 ```go
 // Use the transaction helper for automatic commit/rollback
@@ -673,6 +714,25 @@ err := testCtx.Transaction().WithCommitOnly(func(tx *gorm.DB) error {
     // Operation will be committed regardless of return value
     return nil
 })
+
+// New in v0.2.1: Works with models that have custom TableName() methods 
+// regardless of how they were registered:
+testCtx.RegisterModel(&MyModel{}) // Standard registration
+RegisterModelWithRelationships[MyModel](testCtx) // Generic registration
+
+// Table name will be correctly resolved in all scenarios
+err = testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
+    return tx.Create(&MyModel{Name: "test"}).Error
+})
+
+// New in v0.2.1: Works with map values in Create operations
+err = testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
+    values := map[string]interface{}{"name": "test"}
+    return tx.Model(&MyModel{}).Create(values).Error
+})
+
+// New in v0.2.1: No more callback warning messages in test output
+// thanks to unique session IDs and precise callback tracking
 ```
 
 ### 5. Concurrent Testing

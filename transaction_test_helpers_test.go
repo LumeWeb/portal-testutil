@@ -324,3 +324,238 @@ func TestTransactionMultipleOperations(t *testing.T) {
 	// Verify the transaction worked without errors
 	assert.NoError(t, err, "Transaction with multiple operations should succeed")
 }
+
+// TableModelForTest is a model with custom TableName method for testing the transaction bug
+type TableModelForTest struct {
+	gorm.Model
+	Field1 string
+}
+
+// TableName returns the custom table name
+func (TableModelForTest) TableName() string {
+	return "my_test_table"
+}
+
+// TestTableNameResolutionInTransaction tests the bug fix for table name resolution in transactions
+// The v0.2.0 issue was that GORM models with TableName() methods would lose their table name
+// information when used within transactions, resulting in "Table not set" errors
+func TestTableNameResolutionInTransaction(t *testing.T) {
+	t.Run("with direct RegisterModel", func(t *testing.T) {
+		// Create test context
+		testCtx := NewDBTestContext(t)
+		defer testCtx.Teardown()
+		testCtx.SkipVerification()
+
+		// Register model directly
+		testCtx.RegisterModel(&TableModelForTest{})
+
+		// Create test model
+		model := &TableModelForTest{Field1: "test"}
+
+		// Set transaction expectations
+		testCtx.mock.ExpectBegin()
+		testCtx.mock.ExpectQuery("INSERT INTO `my_test_table`").WillReturnRows(
+			sqlmock.NewRows([]string{"id"}).AddRow(1))
+		testCtx.mock.ExpectCommit()
+
+		// This would fail with "Table not set" error before our fix
+		err := testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
+			// Without our fix, this would fail with "Table not set" error
+			return tx.Create(model).Error
+		})
+
+		// The test passes if the execution doesn't throw a "Table not set" error
+		assert.NoError(t, err, "Transaction should execute without 'Table not set' error")
+	})
+
+	t.Run("with RegisterModelWithRelationships", func(t *testing.T) {
+		// Create test context
+		testCtx := NewDBTestContext(t)
+		defer testCtx.Teardown()
+		testCtx.SkipVerification()
+
+		// Register model with relationships API - as mentioned in the bug report
+		RegisterModelWithRelationships[TableModelForTest](testCtx)
+
+		// Create test model
+		model := &TableModelForTest{Field1: "test"}
+
+		// Set transaction expectations
+		testCtx.mock.ExpectBegin()
+		testCtx.mock.ExpectQuery("INSERT INTO `my_test_table`").WillReturnRows(
+			sqlmock.NewRows([]string{"id"}).AddRow(1))
+		testCtx.mock.ExpectCommit()
+
+		// This would fail with "Table not set" error before our fix
+		err := testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
+			return tx.Create(model).Error
+		})
+
+		assert.NoError(t, err, "Transaction with RegisterModelWithRelationships should work now")
+	})
+}
+
+// TestTableNameResolutionWithMapValues tests the edge case where a map destination is used in a transaction
+// This specifically tests the fix for when ReflectValue is a map but the table name is lost
+func TestTableNameResolutionWithMapValues(t *testing.T) {
+	// Create test context
+	testCtx := NewDBTestContext(t)
+	defer testCtx.Teardown()
+	testCtx.SkipVerification()
+
+	// Register model with relationships
+	testCtx.RegisterModel(&TableModelForTest{})
+
+	// Create a map with values to insert
+	values := map[string]interface{}{
+		"field1": "test value",
+	}
+
+	// Set transaction expectations
+	testCtx.mock.ExpectBegin()
+	testCtx.mock.ExpectQuery("INSERT INTO `my_test_table`").WillReturnRows(
+		sqlmock.NewRows([]string{"id"}).AddRow(1))
+	testCtx.mock.ExpectCommit()
+
+	// Test with a map destination - should now work with our improved resolution
+	err := testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
+		// This used to fail with "Table not set" because the model info was getting lost
+		return tx.Model(&TableModelForTest{}).Create(values).Error
+	})
+
+	assert.NoError(t, err, "Transaction with map values should succeed")
+}
+
+// TestCallbackTracking tests the callback tracking logic that prevents duplicate
+// warnings when registering callbacks
+func TestCallbackTracking(t *testing.T) {
+	// Create two test contexts to simulate multiple transactions
+	testCtx1 := NewDBTestContext(t)
+	defer testCtx1.Teardown()
+	testCtx1.SkipVerification()
+
+	testCtx2 := NewDBTestContext(t)
+	defer testCtx2.Teardown()
+	testCtx2.SkipVerification()
+
+	// Create transaction helpers
+	txHelper1 := NewTransactionTestHelper(testCtx1)
+	txHelper2 := NewTransactionTestHelper(testCtx2)
+
+	// Verify that each helper has a unique session ID
+	assert.NotEqual(t, txHelper1.sessionID, txHelper2.sessionID,
+		"Transaction helpers should have unique session IDs")
+
+	// Register a model with each context
+	testCtx1.RegisterModel(&TableModelForTest{})
+	testCtx2.RegisterModel(&TableModelForTest{})
+
+	// Create models
+	model1 := &TableModelForTest{Field1: "test1"}
+	model2 := &TableModelForTest{Field1: "test2"}
+
+	// Set transaction expectations for both contexts
+	testCtx1.mock.ExpectBegin()
+	testCtx1.mock.ExpectQuery("INSERT INTO `my_test_table`").WillReturnRows(
+		sqlmock.NewRows([]string{"id"}).AddRow(1))
+	testCtx1.mock.ExpectCommit()
+
+	testCtx2.mock.ExpectBegin()
+	testCtx2.mock.ExpectQuery("INSERT INTO `my_test_table`").WillReturnRows(
+		sqlmock.NewRows([]string{"id"}).AddRow(2))
+	testCtx2.mock.ExpectCommit()
+
+	// Execute transactions in sequence - this tests our callback tracking
+	err1 := txHelper1.ExecuteInTransaction(func(tx *gorm.DB) error {
+		return tx.Create(model1).Error
+	})
+
+	err2 := txHelper2.ExecuteInTransaction(func(tx *gorm.DB) error {
+		return tx.Create(model2).Error
+	})
+
+	// Verify both transactions succeeded
+	assert.NoError(t, err1, "First transaction should succeed")
+	assert.NoError(t, err2, "Second transaction should succeed")
+
+	// Verify that both transaction helpers have registered callbacks
+	assert.Greater(t, len(txHelper1.registeredCallbacks), 0, "First helper should have registered callbacks")
+	assert.Greater(t, len(txHelper2.registeredCallbacks), 0, "Second helper should have registered callbacks")
+
+	// Verify that each helper has different callback names due to unique session IDs
+	var helper1Names, helper2Names []string
+	for name := range txHelper1.registeredCallbacks {
+		helper1Names = append(helper1Names, name)
+	}
+	for name := range txHelper2.registeredCallbacks {
+		helper2Names = append(helper2Names, name)
+	}
+
+	// Verify that no callback name appears in both helpers
+	for _, name1 := range helper1Names {
+		for _, name2 := range helper2Names {
+			assert.NotEqual(t, name1, name2, "Callback names should be unique between helpers")
+		}
+	}
+}
+
+// TestUniqueCallbacksWithSameContext tests that even with the same test context,
+// different transaction helpers have unique callback names to prevent duplicate warnings
+func TestUniqueCallbacksWithSameContext(t *testing.T) {
+	// Create test context
+	testCtx := NewDBTestContext(t)
+	defer testCtx.Teardown()
+	testCtx.SkipVerification()
+
+	// Register model
+	testCtx.RegisterModel(&TableModelForTest{})
+
+	// Create two transaction helpers with the same context
+	txHelper1 := NewTransactionTestHelper(testCtx)
+	txHelper2 := NewTransactionTestHelper(testCtx)
+
+	// Verify that each helper has a unique session ID even with the same context
+	assert.NotEqual(t, txHelper1.sessionID, txHelper2.sessionID,
+		"Transaction helpers should have unique session IDs even with the same context")
+
+	// Set expectations for first transaction
+	testCtx.mock.ExpectBegin()
+	testCtx.mock.ExpectQuery("INSERT INTO `my_test_table`").WillReturnRows(
+		sqlmock.NewRows([]string{"id"}).AddRow(1))
+	testCtx.mock.ExpectCommit()
+
+	// Execute first transaction with first helper
+	err1 := txHelper1.ExecuteInTransaction(func(tx *gorm.DB) error {
+		return tx.Create(&TableModelForTest{Field1: "test1"}).Error
+	})
+	assert.NoError(t, err1, "First transaction should succeed")
+
+	// Set expectations for second transaction
+	testCtx.mock.ExpectBegin()
+	testCtx.mock.ExpectQuery("INSERT INTO `my_test_table`").WillReturnRows(
+		sqlmock.NewRows([]string{"id"}).AddRow(2))
+	testCtx.mock.ExpectCommit()
+
+	// Execute second transaction with second helper
+	err2 := txHelper2.ExecuteInTransaction(func(tx *gorm.DB) error {
+		return tx.Create(&TableModelForTest{Field1: "test2"}).Error
+	})
+	assert.NoError(t, err2, "Second transaction should succeed")
+
+	// Get callback names from both helpers
+	var helper1Callbacks, helper2Callbacks []string
+	for name := range txHelper1.registeredCallbacks {
+		helper1Callbacks = append(helper1Callbacks, name)
+	}
+	for name := range txHelper2.registeredCallbacks {
+		helper2Callbacks = append(helper2Callbacks, name)
+	}
+
+	// Despite using the same test context, each helper should have unique callback names
+	// This is what prevents duplicate callback warnings
+	for _, name1 := range helper1Callbacks {
+		for _, name2 := range helper2Callbacks {
+			assert.NotEqual(t, name1, name2, "Callback names should be unique between helpers with same context")
+		}
+	}
+}

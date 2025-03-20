@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,14 +24,44 @@ type TransactionTestCase struct {
 	Pagination     queryutil.Pagination // Optional pagination for the test case
 }
 
-// TransactionTestHelper provides utilities for testing transactions
+// TransactionTestHelper provides utilities for testing transactions with GORM.
+// It includes specialized functionality for resolving table names in transactions
+// and handling GORM callbacks without generating warning messages.
+//
+// Each TransactionTestHelper instance gets a unique session ID to prevent
+// callback name conflicts when using multiple helpers, which eliminates
+// the "duplicated callback" warnings that would otherwise appear.
 type TransactionTestHelper struct {
-	tc *DBTestContext
+	tc                  *DBTestContext  // The test context this helper works with
+	registeredCallbacks map[string]bool // Tracks which callbacks have been registered and their active state
+	sessionID           string          // Unique ID for this transaction helper instance
 }
 
-// NewTransactionTestHelper creates a new transaction test helper
+// NewTransactionTestHelper creates a new transaction test helper with unique session ID.
+//
+// The helper is assigned a unique session ID based on a timestamp, which ensures
+// that multiple helpers can be used in the same test without causing callback naming
+// conflicts in GORM. The helper also tracks which callbacks it has registered,
+// allowing it to manage them properly without generating warning messages.
+//
+// Example:
+//
+//	// Create a transaction helper
+//	txHelper := NewTransactionTestHelper(testCtx)
+//
+//	// Use it to execute transaction with proper table name resolution
+//	txHelper.ExecuteInTransaction(func(tx *gorm.DB) error {
+//	    return tx.Create(&MyModel{}).Error // Table name is properly resolved
+//	})
 func NewTransactionTestHelper(tc *DBTestContext) *TransactionTestHelper {
-	return &TransactionTestHelper{tc: tc}
+	// Generate a unique session ID for this instance using a timestamp
+	sessionID := fmt.Sprintf("session_%d", time.Now().UnixNano())
+
+	return &TransactionTestHelper{
+		tc:                  tc,
+		registeredCallbacks: make(map[string]bool),
+		sessionID:           sessionID,
+	}
 }
 
 // ExecuteInTransaction executes a function within a transaction and automatically handles
@@ -83,8 +114,9 @@ func (th *TransactionTestHelper) ExecuteInTransaction(fn func(*gorm.DB) error) e
 
 // wrapTransactionWithTableInfo creates a transaction wrapper that ensures proper table resolution.
 // This solves the "Table not set" error that can occur in transaction operations when using
-// registered models via RegisterModels(). The wrapper ensures that each registered model
-// is properly associated with its table name within transaction operations.
+// registered models via RegisterModels() or RegisterModelWithRelationships(). The wrapper
+// ensures that each registered model is properly associated with its table name within
+// transaction operations.
 //
 // This function:
 // 1. Creates a new GORM session for the transaction
@@ -115,77 +147,114 @@ func (th *TransactionTestHelper) wrapTransactionWithTableInfo(tx *gorm.DB) *gorm
 	// 2. The table name is actually resolved right before executing a query
 	// 3. We need to hook into all operations that might execute queries
 
-	// Try to remove existing callbacks to avoid duplication
+	// Clean up any callbacks we previously registered
 	th.removeExistingCallbacks(txWrapper)
 
-	// Register callbacks for all operations that might need table resolution
+	// Register callbacks for all operations that might need table resolution - with unique session ID to prevent duplication
+	callbackBaseNames := []string{
+		"ensure_query_table",
+		"ensure_create_table",
+		"ensure_update_table",
+		"ensure_delete_table",
+		"ensure_raw_table",
+	}
 
-	// Query operations (Find, First, Take, Last, Count, etc.)
-	txWrapper.Callback().Query().Before("gorm:query").Register("testutil:ensure_query_table", func(db *gorm.DB) {
+	// Create full callback names with session ID to ensure uniqueness
+	callbackNames := make([]string, len(callbackBaseNames))
+	for i, baseName := range callbackBaseNames {
+		callbackNames[i] = fmt.Sprintf("testutil:%s:%s", baseName, th.sessionID)
+	}
+
+	// Register Query operation callback
+	callbackName := callbackNames[0]
+	txWrapper.Callback().Query().Before("gorm:query").Register(callbackName, func(db *gorm.DB) {
 		// This is triggered before a SELECT query is executed
 		if (db.Statement.Model != nil || db.Statement.ReflectValue.IsValid()) && db.Statement.Table == "" {
 			th.ensureTableSet(db)
 		}
 	})
+	th.registeredCallbacks[callbackName] = true
 
-	// Create operations (Save, Create)
-	txWrapper.Callback().Create().Before("gorm:create").Register("testutil:ensure_create_table", func(db *gorm.DB) {
+	// Register Create operation callback
+	callbackName = callbackNames[1]
+	txWrapper.Callback().Create().Before("gorm:create").Register(callbackName, func(db *gorm.DB) {
 		// This is triggered before an INSERT query is executed
 		if (db.Statement.Model != nil || db.Statement.ReflectValue.IsValid()) && db.Statement.Table == "" {
 			th.ensureTableSet(db)
 		}
 	})
+	th.registeredCallbacks[callbackName] = true
 
-	// Update operations (Update, Updates, Save with existing record)
-	txWrapper.Callback().Update().Before("gorm:update").Register("testutil:ensure_update_table", func(db *gorm.DB) {
+	// Register Update operation callback
+	callbackName = callbackNames[2]
+	txWrapper.Callback().Update().Before("gorm:update").Register(callbackName, func(db *gorm.DB) {
 		// This is triggered before an UPDATE query is executed
 		if (db.Statement.Model != nil || db.Statement.ReflectValue.IsValid()) && db.Statement.Table == "" {
 			th.ensureTableSet(db)
 		}
 	})
+	th.registeredCallbacks[callbackName] = true
 
-	// Delete operations (Delete, DeletedAt for soft delete)
-	txWrapper.Callback().Delete().Before("gorm:delete").Register("testutil:ensure_delete_table", func(db *gorm.DB) {
+	// Register Delete operation callback
+	callbackName = callbackNames[3]
+	txWrapper.Callback().Delete().Before("gorm:delete").Register(callbackName, func(db *gorm.DB) {
 		// This is triggered before a DELETE query is executed
 		if (db.Statement.Model != nil || db.Statement.ReflectValue.IsValid()) && db.Statement.Table == "" {
 			th.ensureTableSet(db)
 		}
 	})
+	th.registeredCallbacks[callbackName] = true
 
-	// Raw SQL operations
-	txWrapper.Callback().Raw().Before("gorm:raw").Register("testutil:ensure_raw_table", func(db *gorm.DB) {
+	// Register Raw operation callback
+	callbackName = callbackNames[4]
+	txWrapper.Callback().Raw().Before("gorm:raw").Register(callbackName, func(db *gorm.DB) {
 		// This is triggered before a raw SQL query is executed
 		if (db.Statement.Model != nil || db.Statement.ReflectValue.IsValid()) && db.Statement.Table == "" {
 			th.ensureTableSet(db)
 		}
 	})
+	th.registeredCallbacks[callbackName] = true
 
 	return txWrapper
 }
 
-// removeExistingCallbacks attempts to remove existing callbacks to avoid duplication warnings.
-// This function is important when multiple transactions are created, as GORM will otherwise
-// produce warning messages about duplicate callbacks.
+// removeExistingCallbacks removes only the callbacks that this specific TransactionTestHelper
+// instance has previously registered, using its internal tracking system.
 //
-// It removes all our custom callbacks from all processor types (Query, Create, Update, Delete, Raw).
-// This ensures a clean slate before registering new callbacks, preventing the "duplicated callback"
-// warnings that can occur when using multiple transaction helpers or nested transactions.
+// Each transaction helper tracks exactly which callbacks it has registered in its
+// registeredCallbacks map. This enables precise callback management where each helper
+// only removes the callbacks it personally created. The approach has several benefits:
+//
+//  1. Prevents "removing callback" warning messages in logs by only attempting to remove
+//     callbacks that actually exist
+//  2. Allows multiple transaction helpers to coexist without interfering with each other
+//  3. Keeps the GORM callback registry clean by cleaning up after each transaction
+//
+// This is part of the solution to eliminate the warning messages that were previously
+// generated when multiple transactions were used in the same test or when a single
+// transaction helper was reused multiple times.
 func (th *TransactionTestHelper) removeExistingCallbacks(db *gorm.DB) {
-	callbackNames := []string{
-		"testutil:ensure_query_table",
-		"testutil:ensure_create_table",
-		"testutil:ensure_update_table",
-		"testutil:ensure_delete_table",
-		"testutil:ensure_raw_table",
-	}
+	// Only remove callbacks we've actually registered
+	for name, registered := range th.registeredCallbacks {
+		if !registered {
+			continue
+		}
 
-	// Remove each callback from each processor
-	for _, name := range callbackNames {
-		db.Callback().Query().Remove(name)
-		db.Callback().Create().Remove(name)
-		db.Callback().Update().Remove(name)
-		db.Callback().Delete().Remove(name)
-		db.Callback().Raw().Remove(name)
+		// Remove the callback from the appropriate processors
+		if strings.Contains(name, "query_table") {
+			db.Callback().Query().Remove(name)
+		} else if strings.Contains(name, "create_table") {
+			db.Callback().Create().Remove(name)
+		} else if strings.Contains(name, "update_table") {
+			db.Callback().Update().Remove(name)
+		} else if strings.Contains(name, "delete_table") {
+			db.Callback().Delete().Remove(name)
+		} else if strings.Contains(name, "raw_table") {
+			db.Callback().Raw().Remove(name)
+		}
+
+		// Mark as no longer registered
+		th.registeredCallbacks[name] = false
 	}
 }
 
@@ -259,14 +328,20 @@ func (th *TransactionTestHelper) tryGetTableName(model interface{}) string {
 //   - A pointer to a struct
 //   - A direct struct value
 //   - A slice of structs or pointers
+//   - A map (for Create operations with map values)
+//
+// 3. Via the Statement.Dest field when ReflectValue is a map
 //
 // For each case, it attempts to determine the correct table name using:
 // 1. The model's TableName() method (if available)
-// 2. The registered table name from RegisterModel()
+// 2. The registered table name from RegisterModel() or RegisterModelWithRelationships()
 // 3. As a last resort, creating a new instance of the model type to get its TableName
 //
 // This solution works regardless of how the GORM operation is invoked, fixing
-// various edge cases that could lead to "Table not set" errors.
+// various edge cases that could lead to "Table not set" errors, including:
+// - Using RegisterModelWithRelationships with custom TableName models
+// - Map values in Create operations
+// - Transactions where model info is lost during processing
 func (th *TransactionTestHelper) ensureTableSet(db *gorm.DB) {
 	// If a table is already set, no need to do anything
 	if db.Statement.Table != "" {
@@ -320,6 +395,43 @@ func (th *TransactionTestHelper) ensureTableSet(db *gorm.DB) {
 					}
 				}
 			}
+		}
+		// For map values, which GORM uses internally sometimes
+		if db.Statement.ReflectValue.Kind() == reflect.Map {
+			// Check if there's a "TableName" field in the map
+			// This happens during some GORM transaction operations
+			if db.Statement.Dest != nil {
+				th.setTableFromModel(db, db.Statement.Dest)
+				if db.Statement.Table != "" {
+					return
+				}
+			}
+
+			// If we still don't have a table name, check if this is a Create operation
+			// where ReflectValue is used as the value map but the model/table is lost
+			if db.Statement.Dest != nil {
+				destType := reflect.TypeOf(db.Statement.Dest)
+				if destType.Kind() == reflect.Ptr {
+					destType = destType.Elem()
+				}
+
+				if destType.Kind() == reflect.Struct {
+					// Try to get the table name from the destination type
+					tableName := th.tryGetTableName(db.Statement.Dest)
+					if tableName != "" {
+						db.Statement.Table = tableName
+						return
+					}
+				}
+			}
+		}
+	}
+
+	// Check the Dest field if it's available
+	if db.Statement.Dest != nil && db.Statement.Table == "" {
+		th.setTableFromModel(db, db.Statement.Dest)
+		if db.Statement.Table != "" {
+			return
 		}
 	}
 

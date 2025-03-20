@@ -19,6 +19,7 @@
 package testutil
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -655,7 +656,7 @@ type modelWithTableName interface {
 	TableName() string
 }
 
-// DB returns the underlying GORM database connection with table resolution support.
+// DB returns the underlying GORM database connection with enhanced table resolution support.
 //
 // This method provides access to the *gorm.DB instance used by the test context.
 // It wraps the embedded TestContext's DB method to add support for table resolution
@@ -663,10 +664,16 @@ type modelWithTableName interface {
 // that ensure proper table name resolution for all database operations, including
 // those in transactions.
 //
-// The DB method includes critical fixes for GORM transaction table resolution. Unlike
-// the Transaction() helper, which has worked since earlier versions, this enhancement
+// The DB method includes critical fixes for GORM transaction table resolution, including:
+// - Support for models registered via RegisterModel() or RegisterModelWithRelationships()
+// - Support for models with custom TableName() methods (both pointer and value receivers)
+// - Handling of map values in Create operations
+// - Support for operations where the model is available as Statement.Dest
+//
+// Unlike the older versions that had issues with certain transactions, this enhancement
 // allows direct GORM transactions (db.Transaction()) to properly resolve table names
-// from registered models.
+// in all scenarios. It also uses unique session IDs per helper to prevent duplicate
+// callback warnings.
 //
 // Example:
 //
@@ -676,9 +683,22 @@ type modelWithTableName interface {
 //	// In your service code:
 //	service.DB().Model(&models.User{}).Count(&total)
 //
-//	// In transactions - Now works with direct GORM transactions!
+//	// In transactions - Now works with direct GORM transactions and custom TableName models!
 //	service.DB().Transaction(func(tx *gorm.DB) error {
+//	    // This will now correctly resolve the table name for models with TableName methods
 //	    return tx.Create(&models.User{...}).Error
+//	})
+//
+//	// Even works with map values in transactions:
+//	service.DB().Transaction(func(tx *gorm.DB) error {
+//	    values := map[string]interface{}{"name": "test"}
+//	    return tx.Model(&models.User{}).Create(values).Error
+//	})
+//
+//	// And with RegisterModelWithRelationships:
+//	RegisterModelWithRelationships[models.User](testCtx)
+//	service.DB().Transaction(func(tx *gorm.DB) error {
+//	    return tx.Create(&models.User{...}).Error // Table name resolved correctly
 //	})
 //
 //	// Your test expectations:
@@ -698,48 +718,70 @@ func (tc *DBTestContext) DB() *gorm.DB {
 	// Create a new session with registered callbacks for table resolution
 	wrappedDB := baseDB.Session(&gorm.Session{})
 
-	// Register callbacks for all operations that might need table resolution
-	// These are the same callbacks used in the transaction wrapper
+	// Register callbacks for all operations that might need table resolution - with unique session ID to prevent duplication
+	callbackBaseNames := []string{
+		"ensure_query_table",
+		"ensure_create_table",
+		"ensure_update_table",
+		"ensure_delete_table",
+		"ensure_raw_table",
+	}
 
-	// Query operations (Find, First, Take, Last, Count, etc.)
-	wrappedDB.Callback().Query().Before("gorm:query").Register("testutil:ensure_query_table", func(db *gorm.DB) {
+	// Create full callback names with session ID to ensure uniqueness
+	callbackNames := make([]string, len(callbackBaseNames))
+	for i, baseName := range callbackBaseNames {
+		callbackNames[i] = fmt.Sprintf("testutil:%s:%s", baseName, txHelper.sessionID)
+	}
+
+	// Register Query operation callback
+	callbackName := callbackNames[0]
+	wrappedDB.Callback().Query().Before("gorm:query").Register(callbackName, func(db *gorm.DB) {
 		// This is triggered before a SELECT query is executed
-		if db.Statement.Model != nil && db.Statement.Table == "" {
+		if (db.Statement.Model != nil || db.Statement.ReflectValue.IsValid()) && db.Statement.Table == "" {
 			txHelper.ensureTableSet(db)
 		}
 	})
+	txHelper.registeredCallbacks[callbackName] = true
 
-	// Create operations (Save, Create)
-	wrappedDB.Callback().Create().Before("gorm:create").Register("testutil:ensure_create_table", func(db *gorm.DB) {
+	// Register Create operation callback
+	callbackName = callbackNames[1]
+	wrappedDB.Callback().Create().Before("gorm:create").Register(callbackName, func(db *gorm.DB) {
 		// This is triggered before an INSERT query is executed
-		if db.Statement.Model != nil && db.Statement.Table == "" {
+		if (db.Statement.Model != nil || db.Statement.ReflectValue.IsValid()) && db.Statement.Table == "" {
 			txHelper.ensureTableSet(db)
 		}
 	})
+	txHelper.registeredCallbacks[callbackName] = true
 
-	// Update operations (Update, Updates, Save with existing record)
-	wrappedDB.Callback().Update().Before("gorm:update").Register("testutil:ensure_update_table", func(db *gorm.DB) {
+	// Register Update operation callback
+	callbackName = callbackNames[2]
+	wrappedDB.Callback().Update().Before("gorm:update").Register(callbackName, func(db *gorm.DB) {
 		// This is triggered before an UPDATE query is executed
-		if db.Statement.Model != nil && db.Statement.Table == "" {
+		if (db.Statement.Model != nil || db.Statement.ReflectValue.IsValid()) && db.Statement.Table == "" {
 			txHelper.ensureTableSet(db)
 		}
 	})
+	txHelper.registeredCallbacks[callbackName] = true
 
-	// Delete operations (Delete, DeletedAt for soft delete)
-	wrappedDB.Callback().Delete().Before("gorm:delete").Register("testutil:ensure_delete_table", func(db *gorm.DB) {
+	// Register Delete operation callback
+	callbackName = callbackNames[3]
+	wrappedDB.Callback().Delete().Before("gorm:delete").Register(callbackName, func(db *gorm.DB) {
 		// This is triggered before a DELETE query is executed
-		if db.Statement.Model != nil && db.Statement.Table == "" {
+		if (db.Statement.Model != nil || db.Statement.ReflectValue.IsValid()) && db.Statement.Table == "" {
 			txHelper.ensureTableSet(db)
 		}
 	})
+	txHelper.registeredCallbacks[callbackName] = true
 
-	// Raw SQL operations
-	wrappedDB.Callback().Raw().Before("gorm:raw").Register("testutil:ensure_raw_table", func(db *gorm.DB) {
+	// Register Raw operation callback
+	callbackName = callbackNames[4]
+	wrappedDB.Callback().Raw().Before("gorm:raw").Register(callbackName, func(db *gorm.DB) {
 		// This is triggered before a raw SQL query is executed
-		if db.Statement.Model != nil && db.Statement.Table == "" {
+		if (db.Statement.Model != nil || db.Statement.ReflectValue.IsValid()) && db.Statement.Table == "" {
 			txHelper.ensureTableSet(db)
 		}
 	})
+	txHelper.registeredCallbacks[callbackName] = true
 
 	return wrappedDB
 }
