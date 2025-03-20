@@ -655,15 +655,18 @@ type modelWithTableName interface {
 	TableName() string
 }
 
-// DB returns the underlying GORM database connection.
+// DB returns the underlying GORM database connection with table resolution support.
 //
 // This method provides access to the *gorm.DB instance used by the test context.
-// It delegates to the embedded TestContext's DB method. The returned database
-// connection can be used directly in tests to execute database operations.
+// It wraps the embedded TestContext's DB method to add support for table resolution
+// in GORM transactions. The returned database connection is enhanced with callbacks
+// that ensure proper table name resolution for all database operations, including
+// those in transactions.
 //
-// When registered models are detected in GORM calls like db.Model(&someModel),
-// the library handles proper table name resolution for queries, making it
-// compatible with the testsuite's mocking capabilities.
+// The DB method includes critical fixes for GORM transaction table resolution. Unlike
+// the Transaction() helper, which has worked since earlier versions, this enhancement
+// allows direct GORM transactions (db.Transaction()) to properly resolve table names
+// from registered models.
 //
 // Example:
 //
@@ -673,19 +676,72 @@ type modelWithTableName interface {
 //	// In your service code:
 //	service.DB().Model(&models.User{}).Count(&total)
 //
+//	// In transactions - Now works with direct GORM transactions!
+//	service.DB().Transaction(func(tx *gorm.DB) error {
+//	    return tx.Create(&models.User{...}).Error
+//	})
+//
 //	// Your test expectations:
 //	testCtx.ForTable("users").ExpectCount(5)
 func (tc *DBTestContext) DB() *gorm.DB {
-	// For testing purposes, we'll simply return the default DB
-	// A real implementation might involve GORM callbacks, but
-	// this allows us to keep the tests working.
+	// Get the base DB from the context
+	baseDB := tc.TestContext.DB()
 
-	// For production use, we'd implement GORM callbacks to intercept queries
-	// and handle model table name resolution with the test mocks.
+	// If there are no registered models, no need for the special wrapper
+	if len(tc.registeredModels) == 0 {
+		return baseDB
+	}
 
-	// For our tests, we just make sure the table name in the expectation
-	// matches what GORM generates in the query.
-	return tc.TestContext.DB()
+	// Create a transaction helper to use its table resolution logic
+	txHelper := NewTransactionTestHelper(tc)
+
+	// Create a new session with registered callbacks for table resolution
+	wrappedDB := baseDB.Session(&gorm.Session{})
+
+	// Register callbacks for all operations that might need table resolution
+	// These are the same callbacks used in the transaction wrapper
+
+	// Query operations (Find, First, Take, Last, Count, etc.)
+	wrappedDB.Callback().Query().Before("gorm:query").Register("testutil:ensure_query_table", func(db *gorm.DB) {
+		// This is triggered before a SELECT query is executed
+		if db.Statement.Model != nil && db.Statement.Table == "" {
+			txHelper.ensureTableSet(db)
+		}
+	})
+
+	// Create operations (Save, Create)
+	wrappedDB.Callback().Create().Before("gorm:create").Register("testutil:ensure_create_table", func(db *gorm.DB) {
+		// This is triggered before an INSERT query is executed
+		if db.Statement.Model != nil && db.Statement.Table == "" {
+			txHelper.ensureTableSet(db)
+		}
+	})
+
+	// Update operations (Update, Updates, Save with existing record)
+	wrappedDB.Callback().Update().Before("gorm:update").Register("testutil:ensure_update_table", func(db *gorm.DB) {
+		// This is triggered before an UPDATE query is executed
+		if db.Statement.Model != nil && db.Statement.Table == "" {
+			txHelper.ensureTableSet(db)
+		}
+	})
+
+	// Delete operations (Delete, DeletedAt for soft delete)
+	wrappedDB.Callback().Delete().Before("gorm:delete").Register("testutil:ensure_delete_table", func(db *gorm.DB) {
+		// This is triggered before a DELETE query is executed
+		if db.Statement.Model != nil && db.Statement.Table == "" {
+			txHelper.ensureTableSet(db)
+		}
+	})
+
+	// Raw SQL operations
+	wrappedDB.Callback().Raw().Before("gorm:raw").Register("testutil:ensure_raw_table", func(db *gorm.DB) {
+		// This is triggered before a raw SQL query is executed
+		if db.Statement.Model != nil && db.Statement.Table == "" {
+			txHelper.ensureTableSet(db)
+		}
+	})
+
+	return wrappedDB
 }
 
 // RegisterModel registers a GORM model with the test context.

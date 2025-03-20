@@ -205,9 +205,10 @@ Key improvements:
 - Automatically resolves table names for models used within transactions
 - Ensures proper table association even with custom TableName() methods
 - Handles all transaction operations (Create, Update, Delete, Query)
+- Works with both the helper transaction API and direct GORM transactions
 - Works transparently with existing transaction test API
 
-**Example usage:**
+#### Using the Transaction Helper API
 
 ```go
 func TestUserService_CreateUserInTransaction(t *testing.T) {
@@ -233,8 +234,7 @@ func TestUserService_CreateUserInTransaction(t *testing.T) {
             Status:   "active",
         }
         
-        // This would fail without the transaction wrapper
-        // Now it correctly resolves the table name from the registered model
+        // This correctly resolves the table name from the registered model
         result := tx.Create(user)
         if result.Error != nil {
             return result.Error
@@ -251,7 +251,48 @@ func TestUserService_CreateUserInTransaction(t *testing.T) {
 }
 ```
 
-The implementation adds a transaction wrapper that automatically ensures proper table resolution via GORM callbacks. This solution is completely transparent to your test code and service implementations.
+#### Using Direct GORM Transactions
+
+You can now use direct GORM transactions without the helper. This is useful when testing service code that uses GORM's native transaction API:
+
+```go
+func TestUserService_CreateUserWithDirectTransaction(t *testing.T) {
+    // Create test context
+    testCtx := testutil.NewDBTestContext(t)
+    defer testCtx.Teardown()
+    
+    // Register models
+    testCtx.RegisterModel(&models.User{})
+    
+    // Set up transaction expectations
+    testCtx.ForTable("users").ExpectCreate(1)
+    
+    // Create a test service that uses direct GORM transactions
+    service := NewUserService(testCtx.DB())
+    
+    // Call service method that uses db.Transaction() directly
+    user := &models.User{
+        Username: "johndoe",
+        Email:    "john@example.com",
+        Status:   "active",
+    }
+    
+    err := service.CreateUserInTransaction(user)
+    
+    // Assertions
+    assert.NoError(t, err)
+    assert.Equal(t, uint(1), user.ID)
+    
+    // Service implementation using direct GORM transactions
+    // func (s *UserService) CreateUserInTransaction(user *models.User) error {
+    //     return s.db.Transaction(func(tx *gorm.DB) error {
+    //         return tx.Create(user).Error
+    //     })
+    // }
+}
+```
+
+The implementation adds GORM callbacks to both the transaction wrapper and the base DB instance to ensure proper table resolution in all scenarios. This solution is completely transparent to your test code and service implementations.
 
 ### Specialized Handlers for Complex GORM Queries
 

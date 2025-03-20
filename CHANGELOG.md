@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.8 (2025-03-20)
+
+### Added
+- Enhanced transaction support for GORM operations:
+  - Added support for direct GORM transactions (`db.Transaction()`) with proper table resolution
+  - Table names are now correctly resolved in both transaction helpers and direct GORM transactions
+  - GORM callbacks integrated into the main DB instance for seamless table resolution
+  - Added comprehensive test suite for direct transaction operations
+  - Updated documentation with examples for both transaction helper and direct transaction patterns
+
+### Fixed
+- Fixed "Table not set" error in direct GORM transactions when using registered models
+- Fixed table name resolution within nested transaction operations
+
 ## 0.1.7 (2025-03-20)
 
 ### Added

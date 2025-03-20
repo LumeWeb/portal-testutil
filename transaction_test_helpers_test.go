@@ -3,6 +3,7 @@ package testutil
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
@@ -171,4 +172,155 @@ func TestTransactionCreateWithRegisteredModel(t *testing.T) {
 
 	// The test passes if the Create operation completed without errors
 	assert.NoError(t, err, "Create operation should succeed without 'Table not set' error")
+}
+
+// TestTransactionModel is a simple model for direct GORM transaction testing
+type TestTransactionModel struct {
+	gorm.Model
+	Name string
+	Age  int
+}
+
+// TableName returns the table name for the model
+func (TestTransactionModel) TableName() string {
+	return "test_transaction_models"
+}
+
+// TestTransactionPrefixedModel demonstrates a model with a prefixed table name
+type TestTransactionPrefixedModel struct {
+	gorm.Model
+	Title   string
+	Content string
+}
+
+// TableName returns the table name for the model
+func (TestTransactionPrefixedModel) TableName() string {
+	return "prefix_transaction_models"
+}
+
+// TestDirectGormTransaction tests if the fix allows direct GORM transaction to work
+// This tests the fix for the bug where direct GORM transactions failed with
+// "Table not set, please set it like: db.Model(&user) or db.Table("users")"
+func TestDirectGormTransaction(t *testing.T) {
+	// Create test context
+	tc := NewDBTestContext(t)
+	defer tc.Teardown()
+	tc.SkipVerification()
+
+	// Register the model
+	tc.RegisterModel(&TestTransactionModel{})
+
+	// Setup transaction expectations
+	tc.mock.ExpectBegin()
+
+	// Expect an INSERT operation with the correct table name
+	tc.mock.ExpectQuery("INSERT INTO `test_transaction_models`").WillReturnRows(
+		sqlmock.NewRows([]string{"id"}).AddRow(1))
+
+	tc.mock.ExpectCommit()
+
+	// Create a test model
+	model := &TestTransactionModel{
+		Name: "test",
+		Age:  30,
+	}
+
+	// Use direct GORM transaction API - this should now work with the fix
+	err := tc.DB().Transaction(func(tx *gorm.DB) error {
+		return tx.Create(model).Error
+	})
+
+	// Verify the transaction worked without errors
+	assert.NoError(t, err, "Direct GORM transaction should succeed with the fix")
+}
+
+// TestTransactionWithTablePrefix tests if table prefixes work with direct GORM transactions
+func TestTransactionWithTablePrefix(t *testing.T) {
+	// Create test context with prefix
+	tc := NewDBTestContext(t, WithTablePrefix("prefix_"))
+	defer tc.Teardown()
+	tc.SkipVerification()
+
+	// Register the model that has a prefixed TableName method
+	tc.RegisterModel(&TestTransactionPrefixedModel{})
+
+	// Setup transaction expectations
+	tc.mock.ExpectBegin()
+
+	// Expect an INSERT operation with the correct prefixed table name
+	tc.mock.ExpectQuery("INSERT INTO `prefix_transaction_models`").WillReturnRows(
+		sqlmock.NewRows([]string{"id"}).AddRow(1))
+
+	tc.mock.ExpectCommit()
+
+	// Create a test model
+	model := &TestTransactionPrefixedModel{
+		Title:   "test prefixed",
+		Content: "sample content",
+	}
+
+	// Use direct GORM transaction API
+	err := tc.DB().Transaction(func(tx *gorm.DB) error {
+		return tx.Create(model).Error
+	})
+
+	// Verify the transaction worked without errors
+	assert.NoError(t, err, "Transaction with table prefix should succeed")
+}
+
+// TestTransactionMultipleOperations tests a direct GORM transaction with multiple operations
+func TestTransactionMultipleOperations(t *testing.T) {
+	// Create test context
+	tc := NewDBTestContext(t)
+	defer tc.Teardown()
+	tc.SkipVerification()
+
+	// Register the model
+	tc.RegisterModel(&TestTransactionModel{})
+
+	// Setup transaction expectations
+	tc.mock.ExpectBegin()
+
+	// Create expectation
+	tc.mock.ExpectQuery("INSERT INTO `test_transaction_models`").WillReturnRows(
+		sqlmock.NewRows([]string{"id"}).AddRow(1))
+
+	// Find expectation - using time values instead of strings for GORM model fields
+	now := time.Now()
+	tc.mock.ExpectQuery("SELECT \\* FROM `test_transaction_models` WHERE .+id.+ = .+").WillReturnRows(
+		sqlmock.NewRows([]string{"id", "created_at", "updated_at", "deleted_at", "name", "age"}).
+			AddRow(1, now, now, nil, "test", 30))
+
+	// Update expectation (Update() uses a different SQL pattern than Save())
+	tc.mock.ExpectExec("UPDATE `test_transaction_models` SET .+name.+ = .+").WillReturnResult(
+		sqlmock.NewResult(1, 1))
+
+	tc.mock.ExpectCommit()
+
+	// Create a test model
+	model := &TestTransactionModel{
+		Name: "test",
+		Age:  30,
+	}
+
+	// Use direct GORM transaction with multiple operations
+	err := tc.DB().Transaction(func(tx *gorm.DB) error {
+		// Create
+		if err := tx.Create(model).Error; err != nil {
+			return err
+		}
+
+		// Find
+		var found TestTransactionModel
+		if err := tx.First(&found, 1).Error; err != nil {
+			return err
+		}
+
+		// Update
+		found.Name = "updated"
+		return tx.Save(&found).Error
+	})
+
+	// Verify the transaction worked without errors
+	assert.NoError(t, err, "Transaction with multiple operations should succeed")
 }

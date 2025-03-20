@@ -158,6 +158,9 @@ func (th *TransactionTestHelper) tryGetTableName(model interface{}) string {
 // It checks if the model matches any registered model and sets the appropriate table name if needed.
 // This is a critical part of the transaction table resolution functionality that fixes the
 // "Table not set" error in GORM transactions.
+//
+// This logic is used both in the Transaction() helper and the DB() method to provide
+// table resolution for all GORM operations, including direct GORM transactions.
 func (th *TransactionTestHelper) ensureTableSet(db *gorm.DB) {
 	// If a table is already set, no need to do anything
 	if db.Statement.Table != "" {
