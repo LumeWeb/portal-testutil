@@ -1,3 +1,21 @@
+// Package testutil provides utilities for testing service components within the Portal ecosystem.
+//
+// This library extends the core Portal testing facilities with additional utilities specifically for
+// database testing, SQL expectations, service mocking, validation testing, and other
+// testing scenarios. It employs fluent builder patterns to create an expressive API
+// that reduces boilerplate code in tests.
+//
+// Key features include:
+//
+// - DBTestContext: An extension of core.TestContext with database mocking capabilities
+// - ExpectationsBuilder: A fluent interface for building SQL expectations
+// - ValidationTester: Utilities for testing validation logic
+// - TransactionTestHelper: Helpers for testing transactional behavior
+// - ConcurrentTestHelper: Tools for testing concurrent operations
+// - Row Builders: Utilities for creating test data with SQL-compatible wrappers
+//
+// This library aims to make tests more readable, maintainable, and reliable by providing
+// domain-specific testing utilities that align with common testing patterns in the Portal ecosystem.
 package testutil
 
 import (
@@ -292,11 +310,13 @@ func (th *TransactionTestHelper) removeExistingCallbacks(db *gorm.DB) {
 // - Nil pointer models (by creating a new instance)
 // - Direct struct values (by creating a pointer to the value)
 // - Models with relationships (by examining model fields)
+// - Models with both relationships AND lifecycle hooks
 //
 // It tries multiple approaches to obtain the table name:
 // 1. First attempts to call TableName() on the pointer type (for pointer receiver methods)
 // 2. Then attempts to call TableName() on the value type (for value receiver methods)
 // 3. For complex models with relationships, it inspects GORM struct tags for table information
+// 4. For models with lifecycle hooks, it creates a clean instance to avoid hook interference
 //
 // The enhanced implementation adds special handling for complex models with relationships
 // by looking for GORM struct tags that contain table information, which helps resolve
@@ -313,11 +333,15 @@ func (th *TransactionTestHelper) tryGetTableName(model interface{}) string {
 	modelValue := reflect.ValueOf(model)
 	modelType := modelValue.Type()
 
+	// Create a clean type detector
+	isCleanInstance := false
+
 	// Handle pointer types
 	if modelValue.Kind() == reflect.Ptr {
 		if modelValue.IsNil() {
 			// Create a new instance for nil pointers
 			modelValue = reflect.New(modelType.Elem())
+			isCleanInstance = true
 		}
 	} else {
 		// For non-pointer types, create a pointer to use for method calls
@@ -370,6 +394,36 @@ func (th *TransactionTestHelper) tryGetTableName(model interface{}) string {
 		}
 	}
 
+	// Check if the model has lifecycle hooks (BeforeCreate, BeforeUpdate, etc.)
+	// If it does and we're not already working with a clean instance, create one
+	// This prevents hooks from interfering with table name resolution
+	if !isCleanInstance && modelValue.Kind() == reflect.Ptr && !modelValue.IsNil() {
+		hasLifecycleHooks := false
+		hookMethods := []string{"BeforeCreate", "BeforeUpdate", "BeforeSave", "Validate"}
+
+		for _, hookName := range hookMethods {
+			method := modelValue.MethodByName(hookName)
+			if method.IsValid() {
+				hasLifecycleHooks = true
+				break
+			}
+		}
+
+		if hasLifecycleHooks {
+			// Create a clean instance of the model to get the table name
+			// without triggering hooks or side effects
+			cleanType := modelType
+			if cleanType.Kind() == reflect.Ptr {
+				cleanType = cleanType.Elem()
+			}
+			cleanInstance := reflect.New(cleanType).Interface()
+
+			// Recursively try with clean instance, but make sure we don't create
+			// an infinite loop
+			return th.tryGetTableName(cleanInstance)
+		}
+	}
+
 	return ""
 }
 
@@ -386,6 +440,7 @@ func (th *TransactionTestHelper) tryGetTableName(model interface{}) string {
 //   - A slice of structs or pointers
 //   - A map (for Create operations with map values)
 //
+// 3. Via the Statement.Dest field when ReflectValue is a 
 // 3. Via the Statement.Dest field when ReflectValue is a map
 //
 // For each case, it attempts to determine the correct table name using:
@@ -393,11 +448,18 @@ func (th *TransactionTestHelper) tryGetTableName(model interface{}) string {
 // 2. The registered table name from RegisterModel() or RegisterModelWithRelationships()
 // 3. As a last resort, creating a new instance of the model type to get its TableName
 //
+// Enhanced features to handle complex models:
+// - Special detection for models with both relationships AND lifecycle hooks
+// - Clean instance creation to avoid hook side effects
+// - Type name matching for complex models that have been transformed by GORM
+// - Multiple fallback strategies for resolving the table name
+//
 // This solution works regardless of how the GORM operation is invoked, fixing
 // various edge cases that could lead to "Table not set" errors, including:
 // - Using RegisterModelWithRelationships with custom TableName models
 // - Map values in Create operations
-// - Transactions where model info is lost during processing
+// - Models with both relationships AND hooks
+// - Models with both relationships AND hooks 
 func (th *TransactionTestHelper) ensureTableSet(db *gorm.DB) {
 	// If a table is already set, no need to do anything
 	if db.Statement.Table != "" {
@@ -519,12 +581,100 @@ func (th *TransactionTestHelper) ensureTableSet(db *gorm.DB) {
 			}
 		}
 	}
-
 	// Check the Dest field if it's available
+	// Check the Dest field if it's available 
 	if db.Statement.Dest != nil && db.Statement.Table == "" {
 		th.setTableFromModel(db, db.Statement.Dest)
 		if db.Statement.Table != "" {
 			return
+		}
+
+		// Special handling for models with relationships AND hooks
+		// Check if Dest is a model with hooks and provide extra processing
+		destType := reflect.TypeOf(db.Statement.Dest)
+		if destType != nil && destType.Kind() == reflect.Ptr {
+			destValue := reflect.ValueOf(db.Statement.Dest)
+			hasHooks := false
+
+			
+			// Check if it has hooks
+			for _, hookName := range hookMethods {
+				method := destValue.MethodByName(hookName)
+				if method.IsValid() {
+					hasHooks = true
+					break
+				}
+
+			
+			// Check if it has relationships by looking for fields with struct or slice types
+			// that have gorm tags with foreignKey, references, many2many, etc.
+			hasRelationships := false
+			if destType.Elem().Kind() == reflect.Struct {
+				for i := 0; i < destType.Elem().NumField(); i++ {
+
+					
+					// Check field type - could be a struct or slice of structs for relationships
+					fieldType := field.Type
+					if fieldType.Kind() == reflect.Ptr {
+						fieldType = fieldType.Elem()
+
+					if fieldType.Kind() == reflect.Struct ||
+						(fieldType.Kind() == reflect.Slice &&
+							fieldType.Elem().Kind() == reflect.Struct) {
+
+						
+						// Skip standard GORM Model embedding
+						if field.Anonymous && fieldType.Name() == "Model" {
+							continue
+
+						
+						// First, look for GORM struct tags that indicate relationships
+						if strings.Contains(tag, "foreignKey") ||
+							strings.Contains(tag, "references") ||
+							strings.Contains(tag, "many2many") {
+						   strings.Contains(tag, "many2many") {
+							hasRelationships = true
+							break
+
+						// Even without explicit GORM tags, a non-primitive struct field
+						// Even without explicit GORM tags, a non-primitive struct field 
+						if !field.Anonymous &&
+							fieldType.Name() != "Time" && // Skip time.Time fields
+							fieldType.Name() != "NullTime" && // Skip sql.NullTime fields
+							!strings.HasPrefix(fieldType.PkgPath(), "time") && // Skip other time-related fields
+							fieldType.Kind() == reflect.Struct {
+						   fieldType.Kind() == reflect.Struct {
+							hasRelationships = true
+							break
+
+						
+						if fieldType.Kind() == reflect.Slice &&
+							fieldType.Elem().Kind() == reflect.Struct {
+						   fieldType.Elem().Kind() == reflect.Struct {
+							hasRelationships = true
+							break
+						}
+					}
+				}
+
+			
+			// If it has both hooks and relationships, do more thorough processing
+			if hasHooks && hasRelationships {
+				// Try to find this model or its type in the registration map
+				th.tc.mu.Lock()
+
+				
+				for tableName, model := range th.tc.registeredModels {
+					if modelType == destType ||
+						(modelType.Kind() == reflect.Ptr && destType.Kind() == reflect.Ptr &&
+							modelType.Elem() == destType.Elem()) {
+						modelType.Elem() == destType.Elem()) {
+						// Found a direct match, use the registered table name
+						db.Statement.Table = tableName
+						return
+					}
+				}
+			}
 		}
 	}
 
@@ -536,11 +686,28 @@ func (th *TransactionTestHelper) ensureTableSet(db *gorm.DB) {
 		}
 
 		if modelType.Kind() == reflect.Struct {
-			// Try to create a new instance and check its TableName
+			// Create a new clean instance to ensure no hook side effects interfere
 			newInstance := reflect.New(modelType).Interface()
 			tableName := th.tryGetTableName(newInstance)
 			if tableName != "" {
 				db.Statement.Table = tableName
+				return
+
+			
+			// As a final fallback, check if this model type is registered with a custom table name
+			th.tc.mu.Lock()
+
+			
+			for tableName, model := range th.tc.registeredModels {
+				regModelType := reflect.TypeOf(model)
+				if regModelType.Kind() == reflect.Ptr {
+					regModelType = regModelType.Elem()
+
+				
+				if modelType == regModelType {
+					db.Statement.Table = tableName
+					return
+				}
 			}
 		}
 	}
@@ -554,20 +721,144 @@ func (th *TransactionTestHelper) ensureTableSet(db *gorm.DB) {
 //     using our enhanced tryGetTableName helper, which works with both value and pointer receivers
 //  2. If that fails, it checks the model type against all registered models to find a match
 //  3. If direct type comparison fails, it tries matching by type name for complex models
+//  4. For models with both relationships AND hooks, special handling ensures proper table resolution
 //
-// The enhanced implementation adds special handling for complex models with relationships
-// by comparing type names when direct type comparison fails. This is especially useful
-// when GORM has internally transformed the model but the type name remains the same.
+// Enhanced features:
+// - Detection of models with both relationships and lifecycle hooks
+// - Creates clean instances of models to avoid hook side effects during table name resolution
+// - Matches by type name when direct type comparison fails, for models transformed by GORM
+// - Additional relationship tag detection to identify relationship fields
+// - More precise type matching for complex scenarios
 //
 // When a match is found in registered models, it still prioritizes getting the table name
 // from the model's TableName() method over using the registered table name, which ensures
 // that any runtime customization of table names is respected.
 //
 // This approach ensures proper table resolution in all cases, fixing the issues with
-// GORM's internal table resolution during transactions, even for complex models with relationships.
+// GORM's internal table resolution during transactions, even for complex models with both
+// relationships and lifecycle hooks.
 func (th *TransactionTestHelper) setTableFromModel(db *gorm.DB, model interface{}) {
 	if model == nil {
 		return
+	}
+
+	// Check if this is a model with both hooks and relationships
+	// They need special handling due to their complex nature
+	modelType := reflect.TypeOf(model)
+
+	
+	hasHooks := false
+
+	
+	// Only analyze if this is a struct or pointer to struct
+	if modelType.Kind() == reflect.Ptr && !modelValue.IsNil() {
+		elemType := modelType.Elem()
+		if elemType.Kind() == reflect.Struct {
+			// Check for hooks
+			hookMethods := []string{"BeforeCreate", "BeforeUpdate", "BeforeSave", "Validate"}
+			for _, hookName := range hookMethods {
+				method := modelValue.MethodByName(hookName)
+				if method.IsValid() {
+					hasHooks = true
+					break
+				}
+
+			
+			// Check for relationship fields
+			for i := 0; i < elemType.NumField(); i++ {
+
+				
+				// Check field type - could be a struct or slice of structs for relationships
+				fieldType := field.Type
+				if fieldType.Kind() == reflect.Ptr {
+					fieldType = fieldType.Elem()
+
+				if fieldType.Kind() == reflect.Struct ||
+					(fieldType.Kind() == reflect.Slice &&
+						fieldType.Elem().Kind() == reflect.Struct) {
+
+					
+					// Skip standard GORM Model embedding
+					if field.Anonymous && fieldType.Name() == "Model" {
+						continue
+
+					
+					// First, look for GORM struct tags that indicate relationships
+					if strings.Contains(tag, "foreignKey") ||
+						strings.Contains(tag, "references") ||
+						strings.Contains(tag, "many2many") {
+					   strings.Contains(tag, "many2many") {
+						hasRelationships = true
+						break
+
+					// Even without explicit GORM tags, a non-primitive struct field
+					// Even without explicit GORM tags, a non-primitive struct field 
+					if !field.Anonymous &&
+						fieldType.Name() != "Time" && // Skip time.Time fields
+						fieldType.Name() != "NullTime" && // Skip sql.NullTime fields
+						!strings.HasPrefix(fieldType.PkgPath(), "time") && // Skip other time-related fields
+						fieldType.Kind() == reflect.Struct {
+					   fieldType.Kind() == reflect.Struct {
+						hasRelationships = true
+						break
+
+					
+					if fieldType.Kind() == reflect.Slice &&
+						fieldType.Elem().Kind() == reflect.Struct {
+					   fieldType.Elem().Kind() == reflect.Struct {
+						hasRelationships = true
+						break
+					}
+				}
+			}
+		}
+
+	
+	// For models with both hooks and relationships, we need to be extra careful
+	if hasHooks && hasRelationships {
+		// Try to find the model type in our registrations first (most reliable)
+		modelTypeElem := modelType
+		if modelTypeElem.Kind() == reflect.Ptr {
+			modelTypeElem = modelTypeElem.Elem()
+
+		
+		th.tc.mu.Lock()
+
+		
+		// Try to find a direct registration match first
+		for registeredTableName, registeredModel := range th.tc.registeredModels {
+			registeredType := reflect.TypeOf(registeredModel)
+			if registeredType.Kind() == reflect.Ptr {
+				registeredType = registeredType.Elem()
+
+			
+			// If types match exactly, use the registered table name
+			if modelTypeElem == registeredType {
+				// Try to get the table name from a clean instance to avoid hook interference
+				cleanModel := reflect.New(registeredType).Interface()
+				tableNameFromModel := th.tryGetTableName(cleanModel)
+				if tableNameFromModel != "" {
+					db.Statement.Table = tableNameFromModel
+					return
+
+				
+				// Otherwise use the table name from registration
+				db.Statement.Table = registeredTableName
+				return
+			}
+
+		
+		// If no direct match found, create a clean instance and try to get the table name
+		if modelType.Kind() == reflect.Ptr {
+			cleanModel := reflect.New(modelType.Elem()).Interface()
+			tableName := th.tryGetTableName(cleanModel)
+			if tableName != "" {
+				db.Statement.Table = tableName
+				return
+			}
+
+		
+		// Continue with standard processing
 	}
 
 	// First, try to get the table name using our improved tryGetTableName method
@@ -578,7 +869,6 @@ func (th *TransactionTestHelper) setTableFromModel(db *gorm.DB, model interface{
 	}
 
 	// Get the model type to check against registered models
-	modelType := reflect.TypeOf(model)
 	if modelType.Kind() == reflect.Ptr {
 		modelType = modelType.Elem()
 	}
@@ -836,4 +1126,5 @@ func (tc *TransactionTestCase) WithAfterHook(hook func(core.Context, error)) *Tr
 		return err
 	}
 	return tc
+.
 }

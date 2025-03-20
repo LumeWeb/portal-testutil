@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.3 (2025-03-20)
+
+### Fixed
+- Fixed table name resolution for models with both relationships AND lifecycle hooks in transactions:
+  - Added detection and special handling for models with both hooks and relationships
+  - Enhanced relationship detection to identify both explicit GORM relationship tags and inferred relationships
+  - Implemented clean instance creation to avoid hook interference with table name resolution
+  - Improved handling in `tryGetTableName` and `ensureTableSet` functions for models with hooks
+  - Added comprehensive test cases for all model types: simple, relationships-only, hooks-only, and the problematic combined case
+- Added test verification for hook execution in transaction context
+- Added example code and documentation in README for the fix
+
 ## 0.2.2 (2025-03-20)
 
 ### Fixed

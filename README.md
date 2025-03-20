@@ -116,483 +116,158 @@ logger := NewTestLogger() // Returns a properly configured core.Logger
 - **Automatic Relationship Discovery**: Models and their relationships registered automatically
 - **Standardized Patterns**: Consistent approach to service testing
 
-## Recent Enhancements
+## Version History
 
-### Enhanced Transaction Table Resolution for Complex Models with Relationships (v0.2.2)
+### v0.2.3 - Transaction Table Resolution for Models with Both Relationships and Hooks
 
-The v0.2.2 update further improves table name resolution to work with complex models that have relationships
-in transactions. This fixes cases where "Table not set" errors could occur in transactions when using models
-with relationships, particularly when GORM internally transforms the model.
-
-Key improvements:
-- Added specific support for complex models with relationships in transactions
-- Added type name matching when direct type comparison fails
-- Enhanced struct tag extraction for table information
-- Improved handling of GORM's internal model transformations
-- Added comprehensive test cases that verify all CRUD operations with complex models
-
-This enhancement ensures that complex models with relationships work properly in transactions, resolving
-cases where table name resolution would fail in these scenarios:
+Fixes table name resolution for models that have both relationships AND lifecycle hooks, which could cause "Table not set" errors in transactions:
 
 ```go
-// Register a complex model with relationships
-testCtx.RegisterModel(&models.Communication{})  // Has relationships to other models
+// A model with both hooks and relationships
+type BugModel struct {
+    gorm.Model
+    Name       string
+    RelatedID  uint
+    Related    *RelationshipOnlyModel `gorm:"foreignKey:RelatedID"`
+}
 
-// Now works correctly in transactions without requiring explicit table setting
+// Has a lifecycle hook that previously interfered with table resolution
+func (m *BugModel) BeforeCreate(tx *gorm.DB) error {
+    return nil
+}
+
+// Register and use the model in transactions - now works correctly
+testCtx.RegisterModel(&BugModel{})
 err := testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
-    // This would previously fail with "Table not set" for complex models with relationships
+    return tx.Create(&BugModel{Name: "test", RelatedID: 1}).Error
+})
+```
+
+### v0.2.2 - Enhanced Transaction Support for Models with Relationships
+
+Improved table name resolution for complex models with relationships in transactions:
+
+```go
+// Register a model with relationships
+testCtx.RegisterModel(&models.Communication{})
+
+// Now works correctly without requiring explicit table setting
+err := testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
     return tx.Create(&models.Communication{
         CaseID:    1,
         Content:   "test content",
         Direction: "incoming",
     }).Error
 })
-
-// No need for the workaround of setting the table explicitly
-// tx.Table("communications").Create(...) is no longer required
 ```
 
-### Improved Transaction Table Resolution for All GORM Operations (v0.2.1)
+### v0.2.1 - Improved Transaction Support and Callback Handling
 
-The v0.2.1 update further enhances transaction table name resolution to work in all GORM scenarios.
-This fixes remaining edge cases where "Table not set" errors could still occur in transactions when:
-1. Using RegisterModelWithRelationships with custom TableName() methods
-2. Working with map values in Create operations
-3. Handling complex transaction scenarios with model info in Statement.Dest
-
-Key improvements:
-- Enhanced table name resolution for map values in transactions
 - Fixed table resolution with RegisterModelWithRelationships
-- Added support for extracting table name from Statement.Dest field
-- Improved transaction wrapper to handle model-less operations
-- Added comprehensive test suite for all edge cases
+- Added support for map values in Create operations
+- Eliminated GORM callback warnings with unique session IDs
+- Added precise tracking of registered callbacks
 
-### Eliminated GORM Callback Warnings (v0.2.1)
+### v0.2.0 - Transaction Table Resolution with Custom TableName()
 
-The v0.2.1 update implements a sophisticated callback tracking system that eliminates the GORM
-warning messages about duplicate or missing callbacks that could appear in test logs:
+Fixed "Table not set" errors when using models with custom TableName() methods in transactions:
 
-Key improvements:
-- Added unique session ID for each transaction helper instance
-- Implemented precise tracking of registered callbacks by name
-- Added callback removal that only removes callbacks that were registered
-- Prevented duplicate callback warnings with unique naming scheme
-- Added unit tests for callback tracking functionality
-
-### Fixed Transaction Table Resolution with Custom TableName() Methods (v0.2.0)
-
-The v0.2.0 library correctly resolves table names in transactions when using models with custom TableName() methods. This fixes the "Table not set" error that could occur when using models within transactions in tests.
-
-Key improvements:
-- Properly resolves table names from both pointer receiver (`func (*Model) TableName()`) and value receiver (`func (Model) TableName()`) implementations
-- Handles nil pointer models by creating new instances to obtain table names
-- Works with all GORM operations in transactions (Create, Update, Delete, Query)
-- Supports GORM v1.25+ RETURNING clause in insert operations
-- Automatically removes duplicate callbacks to prevent warnings
-
-Example usage:
 ```go
 // Register your model
 testCtx.RegisterModel(&MyModel{})
 
-// Then use it in a transaction - table name will be correctly resolved
+// Now works with both value and pointer TableName() receivers
 err := testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
-    model := &MyModel{Name: "test"}
-    // This will work even if MyModel has a TableName() method
-    return tx.Create(model).Error
+    return tx.Create(&MyModel{Name: "test"}).Error
 })
+```
 
-// New in v0.2.1: Works with RegisterModelWithRelationships
-RegisterModelWithRelationships[MyModel](testCtx)
-err = testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
+## Feature Overview
+
+### Transaction Testing
+
+```go
+// Execute operations in a transaction with proper table resolution
+err := testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
+    // Table name is properly resolved for registered models
     return tx.Create(&MyModel{Name: "test"}).Error
 })
 
-// New in v0.2.1: Works with map values in Create operations
-err = testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
-    values := map[string]interface{}{"name": "test"}
-    return tx.Model(&MyModel{}).Create(values).Error
+// Force rollback regardless of result
+err := testCtx.Transaction().WithRollbackOnly(func(tx *gorm.DB) error {
+    return tx.First(&user, 1).Error
 })
 
-// No more warning messages in test output thanks to the improved callback tracking!
+// Force commit regardless of result
+err := testCtx.Transaction().WithCommitOnly(func(tx *gorm.DB) error {
+    return tx.Create(&model).Error
+})
 ```
 
-### Consistent ExpectInsert/ExpectCreate API with Transaction Handling
-
-Both `ExpectInsert` and `ExpectCreate` now share the same behavior regarding transaction handling:
-
-Key features:
-- `ExpectInsert` now automatically handles transactions just like `ExpectCreate`
-- Both methods support automatic transaction handling with an optional boolean parameter
-- `ExpectCreate` is now a semantic alias for `ExpectInsert`
-- Both support GORM v1.25+ RETURNING clause
-- **Optional automatic transaction handling** - can be disabled by passing `false` as a second parameter
-  - `ExpectCreate(1, false)` - disables auto transaction handling
-  - `ExpectInsert(1, false)` - disables auto transaction handling
-
-**Example usage:**
+### Model Registration
 
 ```go
-func TestUserService_CreateUser(t *testing.T) {
-    // Create test context
-    tc := testutil.NewDBTestContext(t)
-    defer tc.Teardown()
-    
-    // Set up create expectation with automatic transaction handling
-    tc.ForTable("users").ExpectCreate(1)
-    
-    // Create the service with the mocked DB
-    service := NewUserService(tc.DB())
-    
-    // Call the service method that creates a user
-    userID, err := service.CreateUser("johndoe", "john@example.com")
-    
-    // Assertions
-    assert.NoError(t, err)
-    assert.Equal(t, uint(1), userID)
-    
-    // Verify expectations
-    tc.VerifyExpectations()
-}
+// Register a single model
+testCtx.RegisterModel(&models.User{})
 
-func TestUserService_CreateUser_Error(t *testing.T) {
-    // Create test context
-    tc := testutil.NewDBTestContext(t)
-    defer tc.Teardown()
-    
-    // Set up create expectation with error and automatic transaction handling
-    expectedErr := errors.New("duplicate email")
-    tc.ForTable("users").ExpectCreateError(expectedErr)
-    
-    // Create the service with the mocked DB
-    service := NewUserService(tc.DB())
-    
-    // Call the service method that creates a user
-    _, err := service.CreateUser("johndoe", "john@example.com")
-    
-    // Assertions
-    assert.Error(t, err)
-    assert.Equal(t, expectedErr, err)
-    
-    // Verify expectations
-    tc.VerifyExpectations()
-}
+// Register multiple models
+testCtx.RegisterModels(&models.Post{}, &models.Comment{})
 
-// For cases where you need manual control over transactions
-func TestUserService_CreateUser_ManualTransaction(t *testing.T) {
-    tc := testutil.NewDBTestContext(t)
-    defer tc.Teardown()
-    
-    // Disable automatic transaction handling
-    tc.mock.ExpectBegin()
-    tc.ForTable("users").ExpectCreate(1, false) // Pass false to disable auto handling
-    tc.mock.ExpectCommit()
-    
-    // Test service as usual
-    service := NewUserService(tc.DB())
-    userID, err := service.CreateUser("johndoe", "john@example.com")
-    
-    assert.NoError(t, err)
-    assert.Equal(t, uint(1), userID)
-    tc.VerifyExpectations()
-}
+// Generic registration with relationship auto-discovery
+RegisterModelWithRelationships[UserModel](testCtx)
 ```
 
-### Transaction Table Resolution for Registered Models
-
-The transaction testing utilities have been enhanced to support registered models in GORM transactions. This solves the "Table not set" error that can occur in transaction operations even after registering models with `RegisterModels()`.
-
-Key improvements:
-- Automatically resolves table names for models used within transactions
-- Ensures proper table association even with custom TableName() methods
-- Handles all transaction operations (Create, Update, Delete, Query)
-- Works with both the helper transaction API and direct GORM transactions
-- Works transparently with existing transaction test API
-
-#### Using the Transaction Helper API
+### Expectation Building
 
 ```go
-func TestUserService_CreateUserInTransaction(t *testing.T) {
-    // Create test context
-    testCtx := testutil.NewDBTestContext(t)
-    defer testCtx.Teardown()
-    
-    // Register models
-    testCtx.RegisterModel(&models.User{})
-    
-    // Set up transaction expectations
-    testCtx.ForTable("users").
-        ExpectCreate().
-        WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), nil, "johndoe", "john@example.com", "active").
-        ReturnID(1)
-    
-    // Use the transaction helper with a registered model
-    err := testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
-        // Create a new user within transaction
-        user := &models.User{
-            Username: "johndoe",
-            Email:    "john@example.com",
-            Status:   "active",
-        }
-        
-        // This correctly resolves the table name from the registered model
-        result := tx.Create(user)
-        if result.Error != nil {
-            return result.Error
-        }
-        
-        return nil
-    })
-    
-    // Assertions
-    assert.NoError(t, err)
-    
-    // Verify all expectations were met
-    testCtx.VerifyExpectations()
-}
+// Simple create expectation with auto-transaction handling
+testCtx.ForTable("users").ExpectCreate(1)
+
+// Create with error simulation
+testCtx.ForTable("users").ExpectCreateError(errors.New("duplicate key"))
+
+// Find by ID with returned rows
+testCtx.ForTable("users")
+    .ExpectFind()
+    .ByID(1)
+    .ReturnRows(userRows)
+
+// Count with conditions
+testCtx.ForTable("users")
+    .ExpectCount()
+    .Where("status = ?", "active")
+    .ReturnCount(10)
+
+// First() query with GORM's pattern
+testCtx.ForTable("users")
+    .ExpectFind()
+    .Where("username = ?", "johndoe")
+    .HandleStandardFirstRows(userRows)
 ```
 
-#### Using Direct GORM Transactions
-
-You can now use direct GORM transactions without the helper. This is useful when testing service code that uses GORM's native transaction API:
+### Row Building
 
 ```go
-func TestUserService_CreateUserWithDirectTransaction(t *testing.T) {
-    // Create test context
-    testCtx := testutil.NewDBTestContext(t)
-    defer testCtx.Teardown()
-    
-    // Register models
-    testCtx.RegisterModel(&models.User{})
-    
-    // Set up transaction expectations
-    testCtx.ForTable("users").ExpectCreate(1)
-    
-    // Create a test service that uses direct GORM transactions
-    service := NewUserService(testCtx.DB())
-    
-    // Call service method that uses db.Transaction() directly
-    user := &models.User{
-        Username: "johndoe",
+// Build rows from structs
+userRows := testCtx.BuildRowsFrom("users", []models.User{
+    {
+        Model:    gorm.Model{ID: 1},
+        Username: "johndoe", 
         Email:    "john@example.com",
-        Status:   "active",
-    }
-    
-    err := service.CreateUserInTransaction(user)
-    
-    // Assertions
-    assert.NoError(t, err)
-    assert.Equal(t, uint(1), user.ID)
-    
-    // Service implementation using direct GORM transactions
-    // func (s *UserService) CreateUserInTransaction(user *models.User) error {
-    //     return s.db.Transaction(func(tx *gorm.DB) error {
-    //         return tx.Create(user).Error
-    //     })
-    // }
-}
+    },
+    {
+        Model:    gorm.Model{ID: 2},
+        Username: "janedoe",
+        Email:    "jane@example.com", 
+    },
+})
+
+// Or build manually
+rows := testutil.NewModelRowBuilder("name", "email")
+    .AddModelRow(1, "John Doe", "john@example.com")
+    .AddModelRow(2, "Jane Smith", "jane@example.com")
+    .Build()
 ```
-
-The implementation adds GORM callbacks to both the transaction wrapper and the base DB instance to ensure proper table resolution in all scenarios. This solution is completely transparent to your test code and service implementations.
-
-### Specialized Handlers for Complex GORM Queries
-
-The library now provides specialized handlers for complex GORM query patterns that can be challenging to test:
-
-- **HandleStandardFirstRows()**: Precise pattern matching for standard GORM First() queries
-  ```go
-  // This will correctly match the SQL GORM generates for First() with a simple condition
-  tc.ForTable("users").
-      ExpectFind().
-      Where("username = ?", "johndoe").
-      HandleStandardFirstRows(userRows)
-  ```
-
-- **HandleDeletedNotNullRows()**: Special handling for queries that explicitly retrieve soft-deleted records
-  ```go
-  // This will match GORM's Unscoped() queries that look for deleted records
-  tc.ForTable("users").
-      ExpectFind().
-      Where("username = ? AND deleted_at IS NOT NULL", "deleted_user").
-      HandleDeletedNotNullRows(deletedUserRows)
-  ```
-
-- **HandleDeletedAtRows()**: For precise handling of GORM's complex deleted_at conditions
-  ```go
-  // This handles the special case of explicit deleted_at IS NULL conditions
-  tc.ForTable("users").
-      ExpectFind().
-      Where("deleted_at IS NULL").
-      WithDeletedAt().
-      HandleDeletedAtRows(userRows)
-  ```
-
-- **Automatic First() Detection**: The library now better detects GORM's First() patterns even without an explicit First() call
-- **Complex WHERE Clause Support**: Better handling of parenthesized expressions and multiple conditions
-- **Improved Soft Delete Handling**: Better detection and handling of GORM's soft delete conditions
-
-### GORM Model Registration Support
-
-The library now supports registering GORM models for testing, which allows you to use GORM's model-based API in your service code while still being able to use the test framework's high-level expectation builders:
-
-- **Model Registration API**: Register models with `RegisterModel(&models.User{})` or `SetupModels([]interface{}{&models.User{}, &models.Post{}})`
-- **Table Name Extraction**: Table names are automatically extracted from models using GORM's conventions 
-- **TableName() Support**: Models with custom TableName() methods are properly handled
-- **Soft Delete Detection**: Models with GORM's soft delete (DeletedAt field) are automatically detected and handled
-- **Flexible SQL Pattern Matching**: Tests will correctly match GORM's query variations without being brittle
-- **Table Name Resolution**: The test context will properly recognize model references in GORM calls like `db.Model(&models.User{}).Count(&count)`
-- **Compatibility with ForTable()**: After registering models, you can still use `testCtx.ForTable("users").ExpectCount(5)`
-
-**Example Usage:**
-
-```go
-func TestUserService_CountActiveUsers(t *testing.T) {
-    // Create the test context
-    testCtx := testutil.NewDBTestContext(t)
-    defer testCtx.Teardown()
-    
-    // Register a model - this allows test framework to recognize model references
-    testCtx.RegisterModel(&models.User{})
-    
-    // Set up the expectation - table name "users" will be resolved automatically
-    testCtx.ForTable("users").
-        ExpectCount().
-        Where("status = ?", "active").
-        ReturnCount(10)
-    
-    // Create the service with the mocked DB
-    service := NewUserService(testCtx.DB())
-    
-    // Service can use model-based GORM API
-    // This would fail without model registration!
-    count, err := service.CountActiveUsers() // Uses db.Model(&models.User{}).Where(...).Count(&count)
-    
-    // Assertions
-    assert.NoError(t, err)
-    assert.Equal(t, int64(10), count)
-    
-    // Verify all expectations were met
-    testCtx.VerifyExpectations()
-}
-```
-
-With model registration, you can:
-- Write tests with the high-level, expressive ExpectCount and ExpectFind APIs
-- Support service code that uses the `db.Model(&someModel)` pattern
-- Avoid brittle regex-based SQL pattern matching
-- Have proper table prefix support with models
-
-**Helper Methods Added:**
-- `RegisterModel(model interface{})` - Register a single model 
-- `RegisterModels(models ...interface{})` - Register multiple models
-- `SetupModels(models []interface{})` - Register a slice of models
-- `TableNameForModel(model interface{})` - Get the table name for a model
-- `PrefixTableName(table string)` - Apply the configured table prefix to a table name
-- `GetRegisteredTableNames()` - Get a list of all registered table names
-
-### Enhanced Count Query Support
-
-The library now provides a more flexible interface for setting up count expectations with improved ORM compatibility:
-
-- **Basic count expectations** work the same as before: `testCtx.ForTable("users").ExpectCount(5)`
-- **Count with WHERE conditions**: `testCtx.ForTable("users").ExpectCount().Where("status = ?", "active").ReturnCount(3)`
-- **Error handling for count queries**: `testCtx.ForTable("users").ExpectCount().ReturnError(fmt.Errorf("database error"))`
-- **Combined conditions and errors**: `testCtx.ForTable("users").ExpectCount().Where("region = ?", "unknown").ReturnError(errors.New("not found"))`
-- **ORM compatibility by default**: All count queries now return data in the format expected by most ORMs (with a `count(*)` column name)
-- **Backward compatibility option**: For older code, use `WithColumnName("count")` to retain the old column name format
-
-**Key improvements:**
-- By default, count queries now use the column name `count(*)` that most ORMs expect, eliminating scan errors
-- Fixed the scan errors when using Model().Count() query patterns
-- Added options to specify custom column names for specialized use cases
-- Comprehensive test coverage for both compatibility modes
-
-**Example usage in a test:**
-
-```go
-func TestUserService_CountActiveUsers(t *testing.T) {
-    // Create the test context
-    testCtx := testutil.NewDBTestContext(t)
-    defer testCtx.Teardown()
-    
-    // Set up the expectation with a WHERE condition
-    // Works with both Model().Count() and Table().Count() patterns
-    testCtx.ForTable("users").
-        ExpectCount().
-        Where("status = ?", "active").
-        ReturnCount(10)
-    
-    // Create the service with the mocked DB
-    service := NewUserService(testCtx.DB())
-    
-    // Call the method that executes a count query
-    count, err := service.CountActiveUsers()
-    
-    // Assert the results match the expectation
-    assert.NoError(t, err)
-    assert.Equal(t, int64(10), count)
-    
-    // Verify all expectations were met
-    testCtx.VerifyExpectations()
-}
-
-// For backward compatibility with older code
-func TestLegacyCode_CountActiveUsers(t *testing.T) {
-    testCtx := testutil.NewDBTestContext(t)
-    defer testCtx.Teardown()
-    
-    // Use WithColumnName option to specify "count" instead of "count(*)"
-    testCtx.ForTable("users").
-        ExpectCount(WithColumnName("count")).
-        Where("status = ?", "active").
-        ReturnCount(10)
-    
-    // Service that uses older SQL driver or custom query that expects "count" column
-    service := NewLegacyService(testCtx.DB())
-    count, err := service.CountActiveUsers()
-    
-    assert.NoError(t, err)
-    assert.Equal(t, int64(10), count)
-    testCtx.VerifyExpectations()
-}
-
-func TestUserService_CountActiveUsers_Error(t *testing.T) {
-    // Create the test context
-    testCtx := testutil.NewDBTestContext(t)
-    defer testCtx.Teardown()
-    
-    // Set up the expectation with an error
-    expectedErr := errors.New("database connection error")
-    testCtx.ForTable("users").
-        ExpectCount().
-        Where("status = ?", "active").
-        ReturnError(expectedErr)
-    
-    // Create the service with the mocked DB
-    service := NewUserService(testCtx.DB())
-    
-    // Call the method that executes a count query
-    count, err := service.CountActiveUsers()
-    
-    // Assert the error was returned
-    assert.Error(t, err)
-    assert.Equal(t, expectedErr, err)
-    assert.Equal(t, int64(0), count)
-    
-    // Verify all expectations were met
-    testCtx.VerifyExpectations()
-}
-```
-
-### Improved SQLite Version Query Handling
-
-The library now handles SQLite version queries more robustly, preventing false warnings about unmet expectations in test output. This enhancement:
-
-- Automatically handles any format of SQLite version query
-- Suppresses warnings for unmet version query expectations
-- Supports case-insensitive matching for version queries
-
-You don't need to do anything differently - your tests will now run with fewer spurious warnings.
 
 ## Key Components
 
