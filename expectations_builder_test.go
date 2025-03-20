@@ -7,6 +7,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 	"go.lumeweb.com/queryutil"
+	"gorm.io/gorm"
 )
 
 func TestExpectationsBuilder_TablePrefix(t *testing.T) {
@@ -112,6 +113,37 @@ func TestExpectationsBuilder_ExpectInsert(t *testing.T) {
 	// Verify we can chain methods
 	builder = builder.ExpectInsert(2)
 	assert.NotNil(t, builder)
+}
+
+// TestExpectInsertWithReturningClause tests that the ExpectInsert method
+// correctly handles GORM's RETURNING clause that was added in v1.25.
+func TestExpectInsertWithReturningClause(t *testing.T) {
+	// Define test model
+	type TestModel struct {
+		gorm.Model
+		Name string
+	}
+
+	// Create test context
+	tc := NewDBTestContext(t)
+	defer tc.Teardown()
+
+	// Register the model
+	tc.RegisterModel(&TestModel{})
+
+	// Set up insert expectation
+	tc.ForTable("test_models").ExpectInsert(1)
+
+	// Create a transaction helper
+	th := NewTransactionTestHelper(tc)
+
+	// This should succeed with our fix for RETURNING clause
+	err := th.ExecuteInTransaction(func(tx *gorm.DB) error {
+		return tx.Create(&TestModel{Name: "test"}).Error
+	})
+
+	// No error should occur
+	assert.NoError(t, err, "Insert with RETURNING clause should succeed")
 }
 
 func TestExpectationsBuilder_ExpectUpdate(t *testing.T) {

@@ -9,6 +9,7 @@ require (
 	github.com/stretchr/testify v1.10.0
 	go.lumeweb.com/portal v0.4.2-0.20250316120430-55445f3f55dd
 	go.lumeweb.com/queryutil v0.2.0
+	go.uber.org/zap v1.27.0
 	gorm.io/gorm v1.25.12
 )
 
@@ -143,7 +144,6 @@ require (
 	go.sia.tech/renterd v1.0.8 // indirect
 	go.sia.tech/siad v1.5.10-0.20230228235644-3059c0b930ca // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	go.uber.org/zap v1.27.0 // indirect
 	go.uber.org/zap/exp v0.3.0 // indirect
 	golang.org/x/crypto v0.33.0 // indirect
 	golang.org/x/exp v0.0.0-20250218142911-aa4b98e5adaa // indirect

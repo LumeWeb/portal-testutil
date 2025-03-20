@@ -118,16 +118,42 @@ logger := NewTestLogger() // Returns a properly configured core.Logger
 
 ## Recent Enhancements
 
-### ExpectCreate and ExpectCreateError with Automatic Transaction Handling
+### Fixed Transaction Table Resolution with Custom TableName() Methods
 
-The library now provides `ExpectCreate` and `ExpectCreateError` methods that automatically handle GORM's transaction behavior. These methods offer a more intuitive API for testing GORM's Create operations:
+The library now correctly resolves table names in transactions when using models with custom TableName() methods. This fixes the "Table not set" error that could occur when using models within transactions in tests.
+
+Key improvements:
+- Properly resolves table names from both pointer receiver (`func (*Model) TableName()`) and value receiver (`func (Model) TableName()`) implementations
+- Handles nil pointer models by creating new instances to obtain table names
+- Works with all GORM operations in transactions (Create, Update, Delete, Query)
+- Supports GORM v1.25+ RETURNING clause in insert operations
+- Automatically removes duplicate callbacks to prevent warnings
+
+Example usage:
+```go
+// Register your model
+testCtx.RegisterModel(&MyModel{})
+
+// Then use it in a transaction - table name will be correctly resolved
+err := testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
+    model := &MyModel{Name: "test"}
+    // This will work even if MyModel has a TableName() method
+    return tx.Create(model).Error
+})
+```
+
+### Consistent ExpectInsert/ExpectCreate API with Transaction Handling
+
+Both `ExpectInsert` and `ExpectCreate` now share the same behavior regarding transaction handling:
 
 Key features:
-- Automatically handles GORM's transaction behavior (Begin/Commit/Rollback)
-- More semantic API that matches GORM's terminology
+- `ExpectInsert` now automatically handles transactions just like `ExpectCreate`
+- Both methods support automatic transaction handling with an optional boolean parameter
+- `ExpectCreate` is now a semantic alias for `ExpectInsert`
+- Both support GORM v1.25+ RETURNING clause
 - **Optional automatic transaction handling** - can be disabled by passing `false` as a second parameter
   - `ExpectCreate(1, false)` - disables auto transaction handling
-  - `ExpectCreateError(err, false)` - disables auto transaction handling
+  - `ExpectInsert(1, false)` - disables auto transaction handling
 
 **Example usage:**
 

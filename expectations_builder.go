@@ -574,22 +574,102 @@ func (b *ExpectationsBuilder) ExpectSearch(query string) *SearchExpectationBuild
 	}
 }
 
-// ExpectInsert expects an insert operation and returns a row ID
-func (b *ExpectationsBuilder) ExpectInsert(id uint) *ExpectationsBuilder {
+// ExpectInsert expects an insert operation and returns a row ID.
+// This method supports auto-handling of transactions and GORM v1.25+ RETURNING clause.
+//
+// Parameters:
+//   - id: The ID to return from the insert operation
+//   - autoHandleTransaction: Optional boolean parameter to disable automatic transaction handling
+//   - When true or not provided (default): Auto-handles Begin/Commit expectations
+//   - When false: Only adds the insert expectation, without Begin/Commit
+//
+// Examples:
+//
+//	// With automatic transaction handling (default)
+//	testCtx.ForTable("users").ExpectInsert(1)
+//
+//	// With manual transaction handling
+//	tc.mock.ExpectBegin() // Manual transaction begin
+//	testCtx.ForTable("users").ExpectInsert(1, false)
+//	tc.mock.ExpectCommit() // Manual transaction commit
+func (b *ExpectationsBuilder) ExpectInsert(id uint, autoHandleTransaction ...bool) *ExpectationsBuilder {
+	// Default to handling transaction automatically
+	handleTx := true
+	if len(autoHandleTransaction) > 0 && !autoHandleTransaction[0] {
+		handleTx = false
+	}
+
+	if handleTx {
+		// Expect transaction begin
+		b.tc.mock.ExpectBegin()
+	}
+
+	// Set up basic insert expectation
 	b.tc.mock.ExpectExec("^INSERT INTO `" + b.table + "`").
 		WillReturnResult(sqlmock.NewResult(int64(id), 1))
+
+	// For GORM v1.25+ that uses the RETURNING clause, we need to add another expectation
+	returnPattern := "INSERT INTO `" + b.table + "` .*RETURNING `id`"
+	rows := sqlmock.NewRows([]string{"id"}).AddRow(id)
+	b.tc.mock.ExpectQuery(returnPattern).WillReturnRows(rows)
+
+	if handleTx {
+		// Expect transaction commit
+		b.tc.mock.ExpectCommit()
+	}
+
 	return b
 }
 
-// ExpectInsertError expects an insert operation that returns an error
-func (b *ExpectationsBuilder) ExpectInsertError(err error) *ExpectationsBuilder {
+// ExpectInsertError expects an insert operation that returns an error.
+// This method now supports auto-handling of transactions for consistency with ExpectCreateError.
+//
+// Parameters:
+//   - err: The error to return from the insert operation
+//   - autoHandleTransaction: Optional boolean parameter to disable automatic transaction handling
+//   - When true or not provided (default): Auto-handles Begin/Rollback expectations
+//   - When false: Only adds the insert error expectation, without Begin/Rollback
+//
+// Examples:
+//
+//	// With automatic transaction handling (default)
+//	testCtx.ForTable("users").ExpectInsertError(errors.New("duplicate key"))
+//
+//	// With manual transaction handling
+//	tc.mock.ExpectBegin() // Manual transaction begin
+//	testCtx.ForTable("users").ExpectInsertError(errors.New("duplicate key"), false)
+//	tc.mock.ExpectRollback() // Manual transaction rollback
+func (b *ExpectationsBuilder) ExpectInsertError(err error, autoHandleTransaction ...bool) *ExpectationsBuilder {
+	// Default to handling transaction automatically
+	handleTx := true
+	if len(autoHandleTransaction) > 0 && !autoHandleTransaction[0] {
+		handleTx = false
+	}
+
+	if handleTx {
+		// Expect transaction begin
+		b.tc.mock.ExpectBegin()
+	}
+
+	// Set up basic insert error expectation
 	b.tc.mock.ExpectExec("^INSERT INTO `" + b.table + "`").
 		WillReturnError(err)
+
+	// For GORM v1.25+ that uses the RETURNING clause, we need to add another expectation
+	returnPattern := "INSERT INTO `" + b.table + "` .*RETURNING `id`"
+	b.tc.mock.ExpectQuery(returnPattern).WillReturnError(err)
+
+	if handleTx {
+		// Expect transaction rollback
+		b.tc.mock.ExpectRollback()
+	}
+
 	return b
 }
 
 // ExpectCreateError expects a create operation that returns an error.
-// This method automatically handles GORM's transaction behavior by expecting a transaction
+// This is a semantic alias for ExpectInsertError that provides a more GORM-like API.
+// It automatically handles GORM's transaction behavior by expecting a transaction
 // begin before the insert and a rollback after the error.
 //
 // Parameters:
@@ -608,31 +688,14 @@ func (b *ExpectationsBuilder) ExpectInsertError(err error) *ExpectationsBuilder 
 //	testCtx.ForTable("users").ExpectCreateError(errors.New("duplicate key"), false)
 //	tc.mock.ExpectRollback() // Manual transaction rollback
 func (b *ExpectationsBuilder) ExpectCreateError(err error, autoHandleTransaction ...bool) *ExpectationsBuilder {
-	// Default to handling transaction automatically
-	handleTx := true
-	if len(autoHandleTransaction) > 0 && !autoHandleTransaction[0] {
-		handleTx = false
-	}
-
-	if handleTx {
-		// Expect transaction begin
-		b.tc.mock.ExpectBegin()
-	}
-
-	// Expect the insert with error
-	b.ExpectInsertError(err)
-
-	if handleTx {
-		// Expect transaction rollback on error
-		b.tc.mock.ExpectRollback()
-	}
-
-	return b
+	// ExpectCreateError is now just a semantic alias for ExpectInsertError
+	return b.ExpectInsertError(err, autoHandleTransaction...)
 }
 
 // ExpectCreate sets up expectations for a create/insert operation.
-// This method automatically handles GORM's transaction behavior by expecting a transaction
-// begin before the insert and a commit after.
+// This is a semantic alias for ExpectInsert that matches GORM's Create() method terminology.
+// It automatically handles GORM's transaction behavior by expecting a transaction
+// begin before the insert and a commit after, and supports GORM v1.25+ RETURNING clause.
 //
 // Parameters:
 //   - id: The ID to return from the create operation
@@ -650,26 +713,8 @@ func (b *ExpectationsBuilder) ExpectCreateError(err error, autoHandleTransaction
 //	testCtx.ForTable("users").ExpectCreate(1, false)
 //	tc.mock.ExpectCommit() // Manual transaction commit
 func (b *ExpectationsBuilder) ExpectCreate(id uint, autoHandleTransaction ...bool) *ExpectationsBuilder {
-	// Default to handling transaction automatically
-	handleTx := true
-	if len(autoHandleTransaction) > 0 && !autoHandleTransaction[0] {
-		handleTx = false
-	}
-
-	if handleTx {
-		// Expect transaction begin
-		b.tc.mock.ExpectBegin()
-	}
-
-	// Expect the insert
-	b.ExpectInsert(id)
-
-	if handleTx {
-		// Expect transaction commit
-		b.tc.mock.ExpectCommit()
-	}
-
-	return b
+	// ExpectCreate is now just a semantic alias for ExpectInsert
+	return b.ExpectInsert(id, autoHandleTransaction...)
 }
 
 // ExpectUpdate expects an update operation

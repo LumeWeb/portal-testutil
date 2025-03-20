@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.2.0 (2025-03-20)
+
+### Added
+- Support for GORM v1.25+ RETURNING clause in insert operations
+- Comprehensive table name resolution for transactions with improved handling of:
+  - Value receiver TableName() methods
+  - Pointer receiver TableName() methods
+  - Nil pointer models
+  - Slices of models
+  - Direct struct values
+- Improved documentation for transaction helpers and table resolution
+
+### Fixed
+- Fixed critical bug in table name resolution with custom TableName() methods
+- Fixed inconsistency between ExpectInsert and ExpectCreate APIs regarding transaction handling
+- Fixed "Table not set" error when using any type of model in transactions
+- Eliminated duplicate callback warnings by adding proper callback deduplication
+
+### Changed
+- ExpectInsert now automatically handles transactions like ExpectCreate
+- ExpectCreate is now a semantic alias for ExpectInsert
+- Both ExpectInsert and ExpectCreate support automatic transaction handling with optional boolean parameter
+- Enhanced godocs for key functions with detailed explanations and examples
+
+### Breaking Changes
+- **ExpectInsert** now handles transactions automatically by default (previously it did not)
+  - If you rely on the previous behavior where ExpectInsert did not handle transactions, you must now explicitly pass `false` as a second parameter: `ExpectInsert(id, false)`
+  - This change was made to ensure consistency with ExpectCreate and remove API inconsistencies
+
 ## 0.1.8 (2025-03-20)
 
 ### Added
