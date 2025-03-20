@@ -3,6 +3,7 @@ package testutil
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -33,7 +34,9 @@ func NewTransactionTestHelper(tc *DBTestContext) *TransactionTestHelper {
 }
 
 // ExecuteInTransaction executes a function within a transaction and automatically handles
-// commit or rollback based on the result
+// commit or rollback based on the result. It also ensures proper table resolution for
+// registered models, automatically resolving table names for models with custom TableName()
+// methods used within the transaction.
 func (th *TransactionTestHelper) ExecuteInTransaction(fn func(*gorm.DB) error) error {
 	// Start by expecting a transaction
 	th.tc.mock.ExpectBegin()
@@ -44,8 +47,11 @@ func (th *TransactionTestHelper) ExecuteInTransaction(fn func(*gorm.DB) error) e
 		return fmt.Errorf("failed to begin transaction: %w", tx.Error)
 	}
 
-	// Execute the function
-	err := fn(tx)
+	// Create a transaction wrapper that correctly handles model table resolution
+	txWrapper := th.wrapTransactionWithTableInfo(tx)
+
+	// Execute the function with our wrapped transaction
+	err := fn(txWrapper)
 
 	// Handle commit or rollback based on error
 	if err != nil {
@@ -63,7 +69,180 @@ func (th *TransactionTestHelper) ExecuteInTransaction(fn func(*gorm.DB) error) e
 	return nil
 }
 
-// WithRollbackOnly sets up a transaction that will be rolled back regardless of the result
+// wrapTransactionWithTableInfo creates a transaction wrapper that ensures proper table resolution.
+// This solves the "Table not set" error that can occur in transaction operations when using
+// registered models via RegisterModels(). The wrapper ensures that each registered model
+// is properly associated with its table name within transaction operations.
+func (th *TransactionTestHelper) wrapTransactionWithTableInfo(tx *gorm.DB) *gorm.DB {
+	// No need to wrap if there are no registered models
+	if len(th.tc.registeredModels) == 0 {
+		return tx
+	}
+
+	// Create a new session for our wrapped transaction
+	txWrapper := tx.Session(&gorm.Session{})
+
+	// It's important to understand how GORM processes operations with models:
+	// 1. The Model() call only sets up the Statement.Model field but doesn't set the table name
+	// 2. The table name is actually resolved right before executing a query
+	// 3. We need to hook into all operations that might execute queries
+
+	// Register callbacks for all operations that might need table resolution
+
+	// Query operations (Find, First, Take, Last, Count, etc.)
+	txWrapper.Callback().Query().Before("gorm:query").Register("testutil:ensure_query_table", func(db *gorm.DB) {
+		// This is triggered before a SELECT query is executed
+		if db.Statement.Model != nil && db.Statement.Table == "" {
+			th.ensureTableSet(db)
+		}
+	})
+
+	// Create operations (Save, Create)
+	txWrapper.Callback().Create().Before("gorm:create").Register("testutil:ensure_create_table", func(db *gorm.DB) {
+		// This is triggered before an INSERT query is executed
+		if db.Statement.Model != nil && db.Statement.Table == "" {
+			th.ensureTableSet(db)
+		}
+	})
+
+	// Update operations (Update, Updates, Save with existing record)
+	txWrapper.Callback().Update().Before("gorm:update").Register("testutil:ensure_update_table", func(db *gorm.DB) {
+		// This is triggered before an UPDATE query is executed
+		if db.Statement.Model != nil && db.Statement.Table == "" {
+			th.ensureTableSet(db)
+		}
+	})
+
+	// Delete operations (Delete, DeletedAt for soft delete)
+	txWrapper.Callback().Delete().Before("gorm:delete").Register("testutil:ensure_delete_table", func(db *gorm.DB) {
+		// This is triggered before a DELETE query is executed
+		if db.Statement.Model != nil && db.Statement.Table == "" {
+			th.ensureTableSet(db)
+		}
+	})
+
+	// Raw SQL operations
+	txWrapper.Callback().Raw().Before("gorm:raw").Register("testutil:ensure_raw_table", func(db *gorm.DB) {
+		// This is triggered before a raw SQL query is executed
+		if db.Statement.Model != nil && db.Statement.Table == "" {
+			th.ensureTableSet(db)
+		}
+	})
+
+	return txWrapper
+}
+
+// tryGetTableName attempts to get a table name by calling a TableName() method on a model.
+// It uses reflection to dynamically find and invoke the TableName() method if it exists.
+func (th *TransactionTestHelper) tryGetTableName(model interface{}) string {
+	if model == nil {
+		return ""
+	}
+
+	modelValue := reflect.ValueOf(model)
+	if modelValue.Kind() == reflect.Ptr && !modelValue.IsNil() {
+		// Try direct TableName method call
+		tableNameMethod := modelValue.MethodByName("TableName")
+		if tableNameMethod.IsValid() {
+			results := tableNameMethod.Call(nil)
+			if len(results) > 0 && results[0].Kind() == reflect.String {
+				return results[0].String()
+			}
+		}
+	}
+
+	return ""
+}
+
+// ensureTableSet ensures that the table is set for the current DB operation.
+// It checks if the model matches any registered model and sets the appropriate table name if needed.
+// This is a critical part of the transaction table resolution functionality that fixes the
+// "Table not set" error in GORM transactions.
+func (th *TransactionTestHelper) ensureTableSet(db *gorm.DB) {
+	// If a table is already set, no need to do anything
+	if db.Statement.Table != "" {
+		return
+	}
+
+	// First try using the Statement.Model if available
+	if db.Statement.Model != nil {
+		th.setTableFromModel(db, db.Statement.Model)
+		if db.Statement.Table != "" {
+			return
+		}
+	}
+
+	// If we couldn't set from Statement.Model, try the ReflectValue if available
+	if db.Statement.ReflectValue.IsValid() && db.Statement.ReflectValue.Kind() == reflect.Struct {
+		modelValue := db.Statement.ReflectValue.Interface()
+		th.setTableFromModel(db, modelValue)
+		if db.Statement.Table != "" {
+			return
+		}
+	}
+}
+
+// setTableFromModel sets the table name in the DB statement based on a model
+func (th *TransactionTestHelper) setTableFromModel(db *gorm.DB, model interface{}) {
+	if model == nil {
+		return
+	}
+
+	// First, check if the model has a TableName method we can call directly
+	modelVal := reflect.ValueOf(model)
+	if modelVal.Kind() == reflect.Ptr && !modelVal.IsNil() {
+		// Try direct TableName method call
+		tableNameMethod := modelVal.MethodByName("TableName")
+		if tableNameMethod.IsValid() {
+			results := tableNameMethod.Call(nil)
+			if len(results) > 0 && results[0].Kind() == reflect.String {
+				db.Statement.Table = results[0].String()
+				return
+			}
+		}
+	}
+
+	// Get the model type to check against registered models
+	modelType := reflect.TypeOf(model)
+	if modelType.Kind() == reflect.Ptr {
+		modelType = modelType.Elem()
+	}
+
+	if modelType.Kind() != reflect.Struct {
+		return
+	}
+
+	// Lock for reading registered models
+	th.tc.mu.Lock()
+	defer th.tc.mu.Unlock()
+
+	// Check if we can find a matching model registration
+	for tableName, registeredModel := range th.tc.registeredModels {
+		registeredType := reflect.TypeOf(registeredModel)
+		if registeredType.Kind() == reflect.Ptr {
+			registeredType = registeredType.Elem()
+		}
+
+		// If we found a matching model type, set the table name
+		if modelType == registeredType {
+			// For models with TableName method, use the method's return value
+			if tableNameMethod := reflect.ValueOf(registeredModel).MethodByName("TableName"); tableNameMethod.IsValid() {
+				results := tableNameMethod.Call(nil)
+				if len(results) > 0 && results[0].Kind() == reflect.String {
+					db.Statement.Table = results[0].String()
+					return
+				}
+			}
+
+			// Otherwise use the table name from registration
+			db.Statement.Table = tableName
+			return
+		}
+	}
+}
+
+// WithRollbackOnly sets up a transaction that will be rolled back regardless of the result.
+// Like ExecuteInTransaction, it ensures proper table resolution for registered models.
 func (th *TransactionTestHelper) WithRollbackOnly(fn func(*gorm.DB) error) error {
 	// Start by expecting a transaction
 	th.tc.mock.ExpectBegin()
@@ -74,8 +253,11 @@ func (th *TransactionTestHelper) WithRollbackOnly(fn func(*gorm.DB) error) error
 		return fmt.Errorf("failed to begin transaction: %w", tx.Error)
 	}
 
+	// Create a transaction wrapper that correctly handles model table resolution
+	txWrapper := th.wrapTransactionWithTableInfo(tx)
+
 	// Execute the function
-	err := fn(tx)
+	err := fn(txWrapper)
 
 	// Always rollback
 	th.tc.mock.ExpectRollback()
@@ -84,7 +266,8 @@ func (th *TransactionTestHelper) WithRollbackOnly(fn func(*gorm.DB) error) error
 	return err
 }
 
-// WithCommitOnly sets up a transaction that will be committed regardless of the result
+// WithCommitOnly sets up a transaction that will be committed regardless of the result.
+// Like ExecuteInTransaction, it ensures proper table resolution for registered models.
 func (th *TransactionTestHelper) WithCommitOnly(fn func(*gorm.DB) error) error {
 	// Start by expecting a transaction
 	th.tc.mock.ExpectBegin()
@@ -95,8 +278,11 @@ func (th *TransactionTestHelper) WithCommitOnly(fn func(*gorm.DB) error) error {
 		return fmt.Errorf("failed to begin transaction: %w", tx.Error)
 	}
 
+	// Create a transaction wrapper that correctly handles model table resolution
+	txWrapper := th.wrapTransactionWithTableInfo(tx)
+
 	// Execute the function
-	err := fn(tx)
+	err := fn(txWrapper)
 
 	// Always commit
 	th.tc.mock.ExpectCommit()

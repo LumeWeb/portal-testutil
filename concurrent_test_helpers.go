@@ -158,8 +158,9 @@ func RunConcurrentTests(t *testing.T, testCases []ConcurrentTestCase, opts ...fu
 		return
 	}
 
-	// Run each concurrent test
-	for _, tc := range testCases {
+	// Run each concurrent test - use index to avoid copying mutexes
+	for i := range testCases {
+		tc := &testCases[i] // Use a pointer to avoid copying the mutex
 		t.Run(tc.Name, func(t *testing.T) {
 			// Use a specific timeout for these tests
 			timeout := 5 * time.Second

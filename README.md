@@ -13,6 +13,62 @@ The library properly extends the core Portal testing facilities, providing speci
 
 ## Recent Enhancements
 
+### Transaction Table Resolution for Registered Models
+
+The transaction testing utilities have been enhanced to support registered models in GORM transactions. This solves the "Table not set" error that can occur in transaction operations even after registering models with `RegisterModels()`.
+
+Key improvements:
+- Automatically resolves table names for models used within transactions
+- Ensures proper table association even with custom TableName() methods
+- Handles all transaction operations (Create, Update, Delete, Query)
+- Works transparently with existing transaction test API
+
+**Example usage:**
+
+```go
+func TestUserService_CreateUserInTransaction(t *testing.T) {
+    // Create test context
+    testCtx := testutil.NewDBTestContext(t)
+    defer testCtx.Teardown()
+    
+    // Register models
+    testCtx.RegisterModel(&models.User{})
+    
+    // Set up transaction expectations
+    testCtx.ForTable("users").
+        ExpectCreate().
+        WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), nil, "johndoe", "john@example.com", "active").
+        ReturnID(1)
+    
+    // Use the transaction helper with a registered model
+    err := testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
+        // Create a new user within transaction
+        user := &models.User{
+            Username: "johndoe",
+            Email:    "john@example.com",
+            Status:   "active",
+        }
+        
+        // This would fail without the transaction wrapper
+        // Now it correctly resolves the table name from the registered model
+        result := tx.Create(user)
+        if result.Error != nil {
+            return result.Error
+        }
+        
+        return nil
+    })
+    
+    // Assertions
+    assert.NoError(t, err)
+    
+    // Verify all expectations were met
+    testCtx.VerifyExpectations()
+}
+```
+
+The implementation adds a transaction wrapper that automatically ensures proper table resolution via GORM callbacks. This solution is completely transparent to your test code and service implementations.
+
 ### Specialized Handlers for Complex GORM Queries
 
 The library now provides specialized handlers for complex GORM query patterns that can be challenging to test:

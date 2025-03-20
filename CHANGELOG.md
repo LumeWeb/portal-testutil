@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.5 (2025-03-20)
+
+### Added
+- Added transaction table resolution for registered models:
+  - Solved "Table not set" errors when using registered models in transactions
+  - Added automatic table name resolution for models with custom TableName() methods
+  - Enhanced transaction helper with GORM callbacks to ensure correct table resolution
+  - Added support for all transaction operations (Create, Update, Delete, Query)
+  - Comprehensive test suite for transaction table resolution
+
+### Fixed
+- Fixed "Table not set" error in transaction operations with registered models
+- Fixed table name resolution issue with custom TableName() methods in transactions
+
 ## 0.1.4 (2025-03-20)
 
 ### Added
