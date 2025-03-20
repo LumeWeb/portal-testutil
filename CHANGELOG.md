@@ -1,6 +1,18 @@
 # Changelog
 
-## 0.2.3 (2025-03-20)
+## 0.2.4 (2025-03-20)
+
+### Fixed
+- Recovered from code corruption in v0.2.3 release:
+  - Fixed serious syntax errors found in the v0.2.3 release that caused build failures
+  - Completely rebuilt the corrupted transaction_test_helpers.go file
+  - Restored proper hook and relationship detection functionality
+  - Ensured comprehensive test coverage for all code paths
+  - Properly validated all changes with robust test suite
+
+## 0.2.3 (2025-03-20) [CORRUPTED - DO NOT USE]
+
+**WARNING: This release contains syntax errors causing build failures. Use v0.2.4 instead.**
 
 ### Fixed
 - Fixed table name resolution for models with both relationships AND lifecycle hooks in transactions:
