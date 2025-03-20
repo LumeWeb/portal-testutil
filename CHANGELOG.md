@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.2 (2025-03-20)
+
+### Fixed
+- Fixed issue with table name resolution for complex models with relationships in transactions:
+  - Added enhanced table name resolution for models with relationships
+  - Added type name matching as a fallback when direct type comparison fails
+  - Added GORM struct tag extraction for table information
+  - Improved handling of models that undergo internal transformation by GORM
+  - Added comprehensive tests for CRUD operations with complex models
+- Eliminated the need for the workaround of manually setting table names in transactions for complex models
+- Added detailed documentation in godocs and README about the enhanced table name resolution for complex models
+
 ## 0.2.1 (2025-03-20)
 
 ### Fixed

@@ -71,14 +71,31 @@ func NewTransactionTestHelper(tc *DBTestContext) *TransactionTestHelper {
 //
 // This function fixes the common "Table not set" error in GORM when using models with
 // TableName() methods inside transactions by automatically registering appropriate
-// callbacks to resolve table names. It works with both value and pointer receiver
-// TableName() methods.
+// callbacks to resolve table names. It works with:
+//
+// - Both value and pointer receiver TableName() methods
+// - Simple models without relationships
+// - Complex models with relationships
+// - Models that have been transformed internally by GORM
+//
+// The enhanced table name resolution ensures that even in complex scenarios where
+// GORM might internally transform a model (such as with relationship loading), the
+// correct table name is still resolved.
 //
 // Example:
 //
 //	testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
-//	    // This will now correctly resolve the table name for MyModel
-//	    return tx.Create(&MyModel{Name: "test"}).Error
+//	    // Creates a simple model with correct table name resolution
+//	    err := tx.Create(&SimpleModel{Name: "test"}).Error
+//	    if err != nil {
+//	        return err
+//	    }
+//
+//	    // Also works with complex models that have relationships
+//	    return tx.Create(&ComplexModel{
+//	        RelatedID: 1,
+//	        Name: "test",
+//	    }).Error
 //	})
 func (th *TransactionTestHelper) ExecuteInTransaction(fn func(*gorm.DB) error) error {
 	// Start by expecting a transaction
@@ -130,9 +147,18 @@ func (th *TransactionTestHelper) ExecuteInTransaction(fn func(*gorm.DB) error) e
 // - Nil pointer models
 // - Slices of models
 // - Direct struct values
+// - Complex models with relationships
+// - Models that have been transformed to map internally by GORM
+//
+// The enhanced table name resolution includes:
+// - Looking up models by type name when direct type comparison fails
+// - Handling GORM's internal transformation of models to maps
+// - Extracting table name information from GORM struct tags
+// - Matching models by type name for complex scenarios
 //
 // This fixes issues with GORM internal table resolution that occur during transactions,
-// even when models correctly implement the TableName() method.
+// even with complex models that have relationships or when GORM performs internal
+// transformations of the models.
 func (th *TransactionTestHelper) wrapTransactionWithTableInfo(tx *gorm.DB) *gorm.DB {
 	// No need to wrap if there are no registered models
 	if len(th.tc.registeredModels) == 0 {
@@ -265,13 +291,20 @@ func (th *TransactionTestHelper) removeExistingCallbacks(db *gorm.DB) {
 // - Both value receiver and pointer receiver TableName() methods
 // - Nil pointer models (by creating a new instance)
 // - Direct struct values (by creating a pointer to the value)
+// - Models with relationships (by examining model fields)
 //
 // It tries multiple approaches to obtain the table name:
 // 1. First attempts to call TableName() on the pointer type (for pointer receiver methods)
 // 2. Then attempts to call TableName() on the value type (for value receiver methods)
+// 3. For complex models with relationships, it inspects GORM struct tags for table information
+//
+// The enhanced implementation adds special handling for complex models with relationships
+// by looking for GORM struct tags that contain table information, which helps resolve
+// the table name even when the model has been transformed internally by GORM.
 //
 // This comprehensive approach ensures that regardless of how the TableName() method
-// is implemented (pointer or value receiver), the correct table name will be resolved.
+// is implemented (pointer or value receiver) or how complex the model structure is,
+// the correct table name will be resolved.
 func (th *TransactionTestHelper) tryGetTableName(model interface{}) string {
 	if model == nil {
 		return ""
@@ -310,6 +343,29 @@ func (th *TransactionTestHelper) tryGetTableName(model interface{}) string {
 			results := valueMethod.Call(nil)
 			if len(results) > 0 && results[0].Kind() == reflect.String {
 				return results[0].String()
+			}
+		}
+	}
+
+	// For complex models with relationships, try to find the table name
+	// by examining the model's fields for GORM struct tag hints
+	if modelValue.Kind() == reflect.Ptr && modelValue.Elem().Kind() == reflect.Struct {
+		structVal := modelValue.Elem()
+		structType := structVal.Type()
+
+		// Look for GORM model embedding or table name hints in struct tags
+		for i := 0; i < structType.NumField(); i++ {
+			field := structType.Field(i)
+
+			// Check for GORM struct tags that might have table information
+			tag := field.Tag.Get("gorm")
+			if strings.Contains(tag, "table:") {
+				parts := strings.Split(tag, ";")
+				for _, part := range parts {
+					if strings.HasPrefix(part, "table:") {
+						return strings.TrimPrefix(part, "table:")
+					}
+				}
 			}
 		}
 	}
@@ -424,6 +480,43 @@ func (th *TransactionTestHelper) ensureTableSet(db *gorm.DB) {
 					}
 				}
 			}
+
+			// Enhanced handling for complex models with relationships
+			// For complex models with relationships, the map transformation may have lost the original model type
+			// Try to find the model type by examining registered models that might match
+			if db.Statement.Table == "" && db.Statement.Dest != nil {
+				// Lock for reading registered models
+				th.tc.mu.Lock()
+				defer th.tc.mu.Unlock()
+
+				// Get the type name of the destination
+				destType := reflect.TypeOf(db.Statement.Dest)
+				if destType.Kind() == reflect.Ptr {
+					destType = destType.Elem()
+				}
+				destTypeName := destType.String()
+
+				// Look for models with matching type name in the registry
+				for registeredTableName, registeredModel := range th.tc.registeredModels {
+					registeredType := reflect.TypeOf(registeredModel)
+					if registeredType.Kind() == reflect.Ptr {
+						registeredType = registeredType.Elem()
+					}
+
+					// If we find a matching type name, use its table name
+					if registeredType.String() == destTypeName {
+						tableNameFromModel := th.tryGetTableName(registeredModel)
+						if tableNameFromModel != "" {
+							db.Statement.Table = tableNameFromModel
+							return
+						}
+
+						// Or use the table name from registration
+						db.Statement.Table = registeredTableName
+						return
+					}
+				}
+			}
 		}
 	}
 
@@ -456,17 +549,22 @@ func (th *TransactionTestHelper) ensureTableSet(db *gorm.DB) {
 // setTableFromModel sets the table name in the DB statement based on a model.
 // This function is a critical part of the fix for the "Table not set" error in GORM transactions.
 //
-// It attempts to get the table name using two approaches:
+// It attempts to get the table name using multiple approaches:
 //  1. First tries to get the table name directly from the model's TableName() method
 //     using our enhanced tryGetTableName helper, which works with both value and pointer receivers
 //  2. If that fails, it checks the model type against all registered models to find a match
+//  3. If direct type comparison fails, it tries matching by type name for complex models
+//
+// The enhanced implementation adds special handling for complex models with relationships
+// by comparing type names when direct type comparison fails. This is especially useful
+// when GORM has internally transformed the model but the type name remains the same.
 //
 // When a match is found in registered models, it still prioritizes getting the table name
 // from the model's TableName() method over using the registered table name, which ensures
 // that any runtime customization of table names is respected.
 //
 // This approach ensures proper table resolution in all cases, fixing the issues with
-// GORM's internal table resolution during transactions.
+// GORM's internal table resolution during transactions, even for complex models with relationships.
 func (th *TransactionTestHelper) setTableFromModel(db *gorm.DB, model interface{}) {
 	if model == nil {
 		return
@@ -503,6 +601,21 @@ func (th *TransactionTestHelper) setTableFromModel(db *gorm.DB, model interface{
 		// If we found a matching model type, set the table name
 		if modelType == registeredType {
 			// First try to get the table name from the registered model
+			tableNameFromModel := th.tryGetTableName(registeredModel)
+			if tableNameFromModel != "" {
+				db.Statement.Table = tableNameFromModel
+				return
+			}
+
+			// Otherwise use the table name from registration
+			db.Statement.Table = registeredTableName
+			return
+		}
+
+		// Check if the type names match, which can help with models with relationships
+		// This is especially helpful when GORM has processed the model internally
+		if modelType.String() == registeredType.String() {
+			// Try to get the table name from the registered model
 			tableNameFromModel := th.tryGetTableName(registeredModel)
 			if tableNameFromModel != "" {
 				db.Statement.Table = tableNameFromModel

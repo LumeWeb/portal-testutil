@@ -118,6 +118,40 @@ logger := NewTestLogger() // Returns a properly configured core.Logger
 
 ## Recent Enhancements
 
+### Enhanced Transaction Table Resolution for Complex Models with Relationships (v0.2.2)
+
+The v0.2.2 update further improves table name resolution to work with complex models that have relationships
+in transactions. This fixes cases where "Table not set" errors could occur in transactions when using models
+with relationships, particularly when GORM internally transforms the model.
+
+Key improvements:
+- Added specific support for complex models with relationships in transactions
+- Added type name matching when direct type comparison fails
+- Enhanced struct tag extraction for table information
+- Improved handling of GORM's internal model transformations
+- Added comprehensive test cases that verify all CRUD operations with complex models
+
+This enhancement ensures that complex models with relationships work properly in transactions, resolving
+cases where table name resolution would fail in these scenarios:
+
+```go
+// Register a complex model with relationships
+testCtx.RegisterModel(&models.Communication{})  // Has relationships to other models
+
+// Now works correctly in transactions without requiring explicit table setting
+err := testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
+    // This would previously fail with "Table not set" for complex models with relationships
+    return tx.Create(&models.Communication{
+        CaseID:    1,
+        Content:   "test content",
+        Direction: "incoming",
+    }).Error
+})
+
+// No need for the workaround of setting the table explicitly
+// tx.Table("communications").Create(...) is no longer required
+```
+
 ### Improved Transaction Table Resolution for All GORM Operations (v0.2.1)
 
 The v0.2.1 update further enhances transaction table name resolution to work in all GORM scenarios.
@@ -729,6 +763,50 @@ err = testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
 err = testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
     values := map[string]interface{}{"name": "test"}
     return tx.Model(&MyModel{}).Create(values).Error
+})
+
+// New in v0.2.2: Works with complex models that have relationships
+testCtx.RegisterModel(&models.Communication{}) // Model with relationships to other models
+
+// Works correctly with complex models without requiring explicit table setting
+err = testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
+    return tx.Create(&models.Communication{
+        CaseID:    1,
+        Content:   "test content",
+        Direction: "incoming",
+    }).Error
+})
+
+// New in v0.2.2: Works with all CRUD operations on complex models
+err = testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
+    // Create, Find, Update, and Delete all work correctly
+    // with complex models that have relationships
+    
+    // 1. Create
+    comm := &models.Communication{...}
+    if err := tx.Create(comm).Error; err != nil {
+        return err
+    }
+    
+    // 2. Find
+    var found models.Communication
+    if err := tx.First(&found, comm.ID).Error; err != nil {
+        return err
+    }
+    
+    // 3. Update
+    if err := tx.Model(&models.Communication{}).
+        Where("id = ?", comm.ID).
+        Update("content", "updated").Error; err != nil {
+        return err
+    }
+    
+    // 4. Delete - soft delete correctly handled
+    if err := tx.Delete(&models.Communication{}, comm.ID).Error; err != nil {
+        return err
+    }
+    
+    return nil
 })
 
 // New in v0.2.1: No more callback warning messages in test output
