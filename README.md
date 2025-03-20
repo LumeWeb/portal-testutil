@@ -13,6 +13,85 @@ The library properly extends the core Portal testing facilities, providing speci
 
 ## Recent Enhancements
 
+### ExpectCreate and ExpectCreateError with Automatic Transaction Handling
+
+The library now provides `ExpectCreate` and `ExpectCreateError` methods that automatically handle GORM's transaction behavior. These methods offer a more intuitive API for testing GORM's Create operations:
+
+Key features:
+- Automatically handles GORM's transaction behavior (Begin/Commit/Rollback)
+- More semantic API that matches GORM's terminology
+- **Optional automatic transaction handling** - can be disabled by passing `false` as a second parameter
+  - `ExpectCreate(1, false)` - disables auto transaction handling
+  - `ExpectCreateError(err, false)` - disables auto transaction handling
+
+**Example usage:**
+
+```go
+func TestUserService_CreateUser(t *testing.T) {
+    // Create test context
+    tc := testutil.NewDBTestContext(t)
+    defer tc.Teardown()
+    
+    // Set up create expectation with automatic transaction handling
+    tc.ForTable("users").ExpectCreate(1)
+    
+    // Create the service with the mocked DB
+    service := NewUserService(tc.DB())
+    
+    // Call the service method that creates a user
+    userID, err := service.CreateUser("johndoe", "john@example.com")
+    
+    // Assertions
+    assert.NoError(t, err)
+    assert.Equal(t, uint(1), userID)
+    
+    // Verify expectations
+    tc.VerifyExpectations()
+}
+
+func TestUserService_CreateUser_Error(t *testing.T) {
+    // Create test context
+    tc := testutil.NewDBTestContext(t)
+    defer tc.Teardown()
+    
+    // Set up create expectation with error and automatic transaction handling
+    expectedErr := errors.New("duplicate email")
+    tc.ForTable("users").ExpectCreateError(expectedErr)
+    
+    // Create the service with the mocked DB
+    service := NewUserService(tc.DB())
+    
+    // Call the service method that creates a user
+    _, err := service.CreateUser("johndoe", "john@example.com")
+    
+    // Assertions
+    assert.Error(t, err)
+    assert.Equal(t, expectedErr, err)
+    
+    // Verify expectations
+    tc.VerifyExpectations()
+}
+
+// For cases where you need manual control over transactions
+func TestUserService_CreateUser_ManualTransaction(t *testing.T) {
+    tc := testutil.NewDBTestContext(t)
+    defer tc.Teardown()
+    
+    // Disable automatic transaction handling
+    tc.mock.ExpectBegin()
+    tc.ForTable("users").ExpectCreate(1, false) // Pass false to disable auto handling
+    tc.mock.ExpectCommit()
+    
+    // Test service as usual
+    service := NewUserService(tc.DB())
+    userID, err := service.CreateUser("johndoe", "john@example.com")
+    
+    assert.NoError(t, err)
+    assert.Equal(t, uint(1), userID)
+    tc.VerifyExpectations()
+}
+```
+
 ### Transaction Table Resolution for Registered Models
 
 The transaction testing utilities have been enhanced to support registered models in GORM transactions. This solves the "Table not set" error that can occur in transaction operations even after registering models with `RegisterModels()`.
@@ -310,6 +389,26 @@ testCtx.ForTable("users")
     .ExpectTransaction()
     .Insert(1)
     .Commit()
+
+// Set up expectations for a create operation (with auto-transaction handling)
+testCtx.ForTable("users")
+    .ExpectCreate(1)
+
+// Set up expectations for a create operation (with manual transaction handling)
+tc.mock.ExpectBegin()
+testCtx.ForTable("users")
+    .ExpectCreate(1, false) // Pass false to disable auto handling
+tc.mock.ExpectCommit()
+
+// Set up expectations for a create error (with auto-transaction handling)
+testCtx.ForTable("users")
+    .ExpectCreateError(errors.New("duplicate key"))
+
+// Set up expectations for a create error (with manual transaction handling)
+tc.mock.ExpectBegin()
+testCtx.ForTable("users")
+    .ExpectCreateError(errors.New("duplicate key"), false) // Pass false to disable auto handling
+tc.mock.ExpectRollback()
 
 // Set up expectations for a find operation
 testCtx.ForTable("items")

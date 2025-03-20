@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.6 (2025-03-20)
+
+### Added
+- Added `ExpectCreate` and `ExpectCreateError` methods with automatic transaction handling:
+  - Automatically handles GORM's transaction behavior (Begin/Commit/Rollback)
+  - Provides a more semantic API that matches GORM's Create() method terminology
+  - Supports both automatic and manual transaction handling modes
+  - Optional boolean parameter to disable automatic transaction handling
+  - Comprehensive test coverage for both modes
+  - Complete documentation with examples for various use cases
+- Added transaction-based Create methods:
+  - Added `Create(id)` method to TransactionExpectationBuilder as a semantic wrapper for Insert
+  - Added `CreateError(err)` method to TransactionExpectationBuilder for error handling
+
+### Fixed
+- Fixed SQL pattern matching for GORM's Create operations by using ExpectExec instead of ExpectQuery
+
 ## 0.1.5 (2025-03-20)
 
 ### Added

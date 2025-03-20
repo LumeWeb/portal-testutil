@@ -341,3 +341,126 @@ func TestSQLPatternMatchingDiagnostics(t *testing.T) {
 	diagnostics = tc2.GetLastSQLDiagnostics()
 	assert.NotEmpty(t, diagnostics, "SQL diagnostics should be generated with EnableSQLDebug()")
 }
+
+// TestExpectCreate_Simple tests the ExpectCreate function with auto transaction handling
+func TestExpectCreate_Simple(t *testing.T) {
+	tc := NewDBTestContext(t)
+	builder := tc.ForTable("users")
+
+	// Create a simple create expectation with auto transaction handling
+	builder = builder.ExpectCreate(1)
+
+	// Verify it returned the original builder
+	assert.NotNil(t, builder)
+
+	// Verify expectation was set up correctly
+	tx := tc.DB().Table("users").Create(&struct{}{})
+	assert.Nil(t, tx.Error)
+	tc.VerifyExpectations()
+}
+
+// TestExpectCreate_WithoutTransaction tests the ExpectCreate function with manual transaction handling
+func TestExpectCreate_WithoutTransaction(t *testing.T) {
+	tc := NewDBTestContext(t)
+	builder := tc.ForTable("users")
+
+	// Set up manual transaction expectations
+	tc.mock.ExpectBegin()
+
+	// Create expectation without auto transaction handling
+	builder = builder.ExpectCreate(1, false)
+
+	// Add commit manually
+	tc.mock.ExpectCommit()
+
+	// Verify it returned the original builder
+	assert.NotNil(t, builder)
+
+	// Verify expectation was set up correctly
+	tx := tc.DB().Table("users").Create(&struct{}{})
+	assert.Nil(t, tx.Error)
+	tc.VerifyExpectations()
+}
+
+// TestExpectCreateError tests the ExpectCreateError function with auto transaction handling
+func TestExpectCreateError(t *testing.T) {
+	tc := NewDBTestContext(t)
+	builder := tc.ForTable("users")
+	expectedErr := errors.New("duplicate key violation")
+
+	// Create a create expectation with error and auto transaction handling
+	builder = builder.ExpectCreateError(expectedErr)
+
+	// Verify it returned the original builder
+	assert.NotNil(t, builder)
+
+	// Verify expectation was set up correctly
+	tx := tc.DB().Table("users").Create(&struct{}{})
+	assert.Error(t, tx.Error)
+	tc.VerifyExpectations()
+}
+
+// TestExpectCreateError_WithoutTransaction tests the ExpectCreateError function with manual transaction handling
+func TestExpectCreateError_WithoutTransaction(t *testing.T) {
+	tc := NewDBTestContext(t)
+	builder := tc.ForTable("users")
+	expectedErr := errors.New("duplicate key violation")
+
+	// Set up manual transaction expectations
+	tc.mock.ExpectBegin()
+
+	// Create expectation without auto transaction handling
+	builder = builder.ExpectCreateError(expectedErr, false)
+
+	// Add rollback manually
+	tc.mock.ExpectRollback()
+
+	// Verify it returned the original builder
+	assert.NotNil(t, builder)
+
+	// Verify expectation was set up correctly
+	tx := tc.DB().Table("users").Create(&struct{}{})
+	assert.Error(t, tx.Error)
+	tc.VerifyExpectations()
+}
+
+// TestTransactionExpectationBuilder_Create tests the Create method on TransactionExpectationBuilder
+func TestTransactionExpectationBuilder_Create(t *testing.T) {
+	tc := NewDBTestContext(t)
+
+	// Start a transaction with create operation
+	tc.ForTable("users").
+		ExpectTransaction().
+		Create(1).
+		Commit()
+
+	// Execute the operation in a transaction
+	tx := tc.DB().Begin()
+	tx.Table("users").Create(&struct{}{})
+	tx.Commit()
+
+	// Verify all expectations were met
+	tc.VerifyExpectations()
+}
+
+// TestTransactionExpectationBuilder_CreateError tests the CreateError method on TransactionExpectationBuilder
+func TestTransactionExpectationBuilder_CreateError(t *testing.T) {
+	tc := NewDBTestContext(t)
+	expectedErr := errors.New("duplicate key violation")
+
+	// Start a transaction with create error and rollback
+	tc.ForTable("users").
+		ExpectTransaction().
+		CreateError(expectedErr).
+		Rollback()
+
+	// Execute the operation in a transaction
+	tx := tc.DB().Begin()
+	// The create operation would fail in a real scenario, but we just need to trigger the expectation
+	tx.Table("users").Create(&struct{}{})
+	// We'd normally check the error and rollback, but for testing we just trigger the expectation
+	tx.Rollback()
+
+	// Verify all expectations were met
+	tc.VerifyExpectations()
+}

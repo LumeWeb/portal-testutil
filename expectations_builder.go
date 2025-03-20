@@ -576,15 +576,99 @@ func (b *ExpectationsBuilder) ExpectSearch(query string) *SearchExpectationBuild
 
 // ExpectInsert expects an insert operation and returns a row ID
 func (b *ExpectationsBuilder) ExpectInsert(id uint) *ExpectationsBuilder {
-	b.tc.mock.ExpectQuery("^INSERT INTO `" + b.table + "`").
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(id))
+	b.tc.mock.ExpectExec("^INSERT INTO `" + b.table + "`").
+		WillReturnResult(sqlmock.NewResult(int64(id), 1))
 	return b
 }
 
 // ExpectInsertError expects an insert operation that returns an error
 func (b *ExpectationsBuilder) ExpectInsertError(err error) *ExpectationsBuilder {
-	b.tc.mock.ExpectQuery("^INSERT INTO `" + b.table + "`").
+	b.tc.mock.ExpectExec("^INSERT INTO `" + b.table + "`").
 		WillReturnError(err)
+	return b
+}
+
+// ExpectCreateError expects a create operation that returns an error.
+// This method automatically handles GORM's transaction behavior by expecting a transaction
+// begin before the insert and a rollback after the error.
+//
+// Parameters:
+//   - err: The error to return from the create operation
+//   - autoHandleTransaction: Optional boolean parameter to disable automatic transaction handling
+//   - When true or not provided (default): Auto-handles Begin/Rollback expectations
+//   - When false: Only adds the insert error expectation, without Begin/Rollback
+//
+// Examples:
+//
+//	// With automatic transaction handling (default)
+//	testCtx.ForTable("users").ExpectCreateError(errors.New("duplicate key"))
+//
+//	// With manual transaction handling
+//	tc.mock.ExpectBegin() // Manual transaction begin
+//	testCtx.ForTable("users").ExpectCreateError(errors.New("duplicate key"), false)
+//	tc.mock.ExpectRollback() // Manual transaction rollback
+func (b *ExpectationsBuilder) ExpectCreateError(err error, autoHandleTransaction ...bool) *ExpectationsBuilder {
+	// Default to handling transaction automatically
+	handleTx := true
+	if len(autoHandleTransaction) > 0 && !autoHandleTransaction[0] {
+		handleTx = false
+	}
+
+	if handleTx {
+		// Expect transaction begin
+		b.tc.mock.ExpectBegin()
+	}
+
+	// Expect the insert with error
+	b.ExpectInsertError(err)
+
+	if handleTx {
+		// Expect transaction rollback on error
+		b.tc.mock.ExpectRollback()
+	}
+
+	return b
+}
+
+// ExpectCreate sets up expectations for a create/insert operation.
+// This method automatically handles GORM's transaction behavior by expecting a transaction
+// begin before the insert and a commit after.
+//
+// Parameters:
+//   - id: The ID to return from the create operation
+//   - autoHandleTransaction: Optional boolean parameter to disable automatic transaction handling
+//   - When true or not provided (default): Auto-handles Begin/Commit expectations
+//   - When false: Only adds the insert expectation, without Begin/Commit
+//
+// Examples:
+//
+//	// With automatic transaction handling (default)
+//	testCtx.ForTable("users").ExpectCreate(1)
+//
+//	// With manual transaction handling
+//	tc.mock.ExpectBegin() // Manual transaction begin
+//	testCtx.ForTable("users").ExpectCreate(1, false)
+//	tc.mock.ExpectCommit() // Manual transaction commit
+func (b *ExpectationsBuilder) ExpectCreate(id uint, autoHandleTransaction ...bool) *ExpectationsBuilder {
+	// Default to handling transaction automatically
+	handleTx := true
+	if len(autoHandleTransaction) > 0 && !autoHandleTransaction[0] {
+		handleTx = false
+	}
+
+	if handleTx {
+		// Expect transaction begin
+		b.tc.mock.ExpectBegin()
+	}
+
+	// Expect the insert
+	b.ExpectInsert(id)
+
+	if handleTx {
+		// Expect transaction commit
+		b.tc.mock.ExpectCommit()
+	}
+
 	return b
 }
 
@@ -949,6 +1033,41 @@ func (t *TransactionExpectationBuilder) UpdateError(err error) *TransactionExpec
 func (t *TransactionExpectationBuilder) Delete() *TransactionExpectationBuilder {
 	t.builder.ExpectDelete()
 	return t
+}
+
+// Create is a convenience wrapper for Insert that provides a more semantic API
+// for transaction-based create operations. This matches GORM's Create() method terminology.
+//
+// Unlike direct ExpectCreate() calls, this method operates within an explicit transaction
+// expectation, so it doesn't handle transaction begin/commit itself.
+//
+// Example:
+//
+//	// Set up expectations for creating a new user in a transaction
+//	testCtx.ForTable("users").ExpectTransaction().Create(1).Commit()
+//
+// This is especially useful when testing service methods that explicitly manage
+// their own transactions using tx := db.Begin().
+func (t *TransactionExpectationBuilder) Create(id uint) *TransactionExpectationBuilder {
+	return t.Insert(id)
+}
+
+// CreateError is a convenience wrapper for InsertError that provides a more semantic API
+// for transaction-based create operations that return errors. This matches GORM's Create()
+// method terminology.
+//
+// Unlike direct ExpectCreateError() calls, this method operates within an explicit transaction
+// expectation, so it doesn't handle transaction begin/rollback itself.
+//
+// Example:
+//
+//	// Set up expectations for a failed user creation in a transaction
+//	testCtx.ForTable("users").ExpectTransaction().CreateError(errors.New("duplicate key")).Rollback()
+//
+// This is especially useful when testing service methods that explicitly manage
+// their own transactions using tx := db.Begin().
+func (t *TransactionExpectationBuilder) CreateError(err error) *TransactionExpectationBuilder {
+	return t.InsertError(err)
 }
 
 // Commit expects a transaction commit
