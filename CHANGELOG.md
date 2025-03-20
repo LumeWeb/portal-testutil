@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.2.5 (2025-03-20)
+
+### Added
+- Integrated `github.com/gertd/go-pluralize` library for more accurate pluralization of table names
+- Enhanced table name resolution in transactions with specialized handling for complex models having both relationships and validation methods
+- New test case `TestModelsWithRelationshipsAndValidation` to verify fix for models with both relationships and hooks
+
+### Fixed
+- Issue where models with both relationships AND validation hooks would lose table information in transactions
+- Improved the transaction helper to register additional callbacks that ensure proper table resolution
+- Enhanced SQL pattern matching for First() method queries with table-qualified columns
+
+### Changed
+- Replaced custom pluralization logic with the more robust `pluralize` library
+- Updated documentation in `HandleStandardFirstRows` method to better explain when and how to use it
+- Added comprehensive troubleshooting section to README.md for common issues like "Table not set" errors
+- Updated `TestTransactionMultipleOperations` to use table helpers instead of raw SQL
+
+### Improved
+- Added detailed comments throughout the codebase explaining complex table resolution logic
+- Enhanced validation for models with both hooks and relationships to prevent "Table not set" errors
+- Better handling of models with complex validation methods that use map operations
+
 ## 0.2.4 (2025-03-20)
 
 ### Fixed

@@ -6,6 +6,7 @@ toolchain go1.23.7
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
+	github.com/gertd/go-pluralize v0.2.1
 	github.com/stretchr/testify v1.10.0
 	go.lumeweb.com/portal v0.4.2-0.20250316120430-55445f3f55dd
 	go.lumeweb.com/queryutil v0.2.0

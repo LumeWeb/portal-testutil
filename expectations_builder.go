@@ -1243,19 +1243,32 @@ func (f *FindExpectationBuilder) HandleDeletedAtRows(rows *sqlmock.Rows) *Expect
 
 // HandleStandardFirstRows is a specialized method for handling standard GORM First() patterns
 // with a simple WHERE condition. This handles the specific SQL and arguments that GORM generates
-// for the most common First() query pattern.
+// for the most common First() query patterns, especially those using First(id) or First(&model, id).
 //
-// The method is optimized for simple equality conditions (field = ?) and creates a precise
-// SQL pattern matcher that exactly matches what GORM generates, including the correct handling
-// of soft deleted models. It automatically adds the proper argument expectations.
+// This method creates a precise SQL pattern matcher that exactly matches what GORM generates,
+// including proper table name qualification in the WHERE clause, the correct handling of
+// soft-deleted models, and the exact ordering of conditions. It's particularly useful for:
 //
-// Recommended for use when testing First() queries with simple equality conditions on soft delete models.
+// 1. ID-based lookups: tx.First(&model, 1)
+// 2. Simple equality conditions: tx.Where("field = ?", value).First(&model)
+// 3. Table-qualified conditions: tx.Where("`table`.`field` = ?", value).First(&model)
 //
-// Example:
+// Using this method is strongly recommended over the more general .First() method when testing
+// specific Find operations, as it matches the exact SQL pattern GORM generates, including
+// proper table qualification in the WHERE clause.
 //
+// Examples:
+//
+//	// For querying by ID
 //	tc.ForTable("users").
 //	    ExpectFind().
-//	    Where("username = ?", "john").
+//	    Where("`users`.`id` = ?", 1).
+//	    HandleStandardFirstRows(rows)
+//
+//	// For other field queries
+//	tc.ForTable("users").
+//	    ExpectFind().
+//	    Where("`users`.`username` = ?", "john").
 //	    HandleStandardFirstRows(rows)
 func (f *FindExpectationBuilder) HandleStandardFirstRows(rows *sqlmock.Rows) *ExpectationsBuilder {
 	// Only works with simple field = ? conditions

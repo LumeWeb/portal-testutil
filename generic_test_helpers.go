@@ -328,12 +328,23 @@ func ExpectServiceTransaction(tc *DBTestContext, opts ServiceTransactionOptions)
 	}
 }
 
-// RegisterModelWithRelationships registers a model and its relationships.
+// RegisterModelWithRelationships registers a model and its relationships, preventing "Table not set" errors in transactions.
 //
-// This function uses generics to provide a type-safe way to register a model and
-// automatically discover and register its related models. It analyzes the fields
-// of the model to find struct-typed fields and slice fields of struct types, which
-// are likely to be relationships.
+// This function is crucial for ensuring proper table name resolution in GORM transactions,
+// especially for complex models that have both relationships AND lifecycle hooks (BeforeCreate,
+// BeforeUpdate, etc.). It provides a reliable solution to the common "Table not set" errors
+// that can occur with such models.
+//
+// The function:
+// 1. Registers the main model with the test context
+// 2. Automatically discovers relationships by analyzing struct fields
+// 3. Registers all related models to ensure proper table resolution in transactions
+// 4. Enables the transaction test helper to resolve table names correctly for all operations
+//
+// This is particularly important for models that have:
+// - Relationship fields (struct types or slices of structs)
+// - Lifecycle hooks that call other methods (like validation methods)
+// - More complex nested structures
 //
 // Parameters:
 //   - tc: The test context to register the models with
@@ -346,6 +357,12 @@ func ExpectServiceTransaction(tc *DBTestContext, opts ServiceTransactionOptions)
 //
 //	// Register User model and explicitly register additional models
 //	RegisterModelWithRelationships[User](tc, &Comment{}, &Tag{})
+//
+//	// Now transaction operations will work correctly without "Table not set" errors
+//	err := tc.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
+//	    // Table name is properly resolved even with hooks and relationships
+//	    return tx.Create(&myComplexModel).Error
+//	})
 func RegisterModelWithRelationships[T any](tc *DBTestContext, additionalModels ...any) {
 	// Create a zero value of the model type
 	var model T

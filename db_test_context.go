@@ -27,11 +27,15 @@ import (
 	"unicode"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/gertd/go-pluralize"
 	"go.lumeweb.com/portal/core"
 	coreTesting "go.lumeweb.com/portal/core/testing"
 	dbTesting "go.lumeweb.com/portal/core/testing/db"
 	"gorm.io/gorm"
 )
+
+// Create a package-level pluralizer instance
+var pluralizer = pluralize.NewClient()
 
 // Config contains configuration options for the test context.
 // This allows customizing the behavior of the test context for specific test scenarios.
@@ -904,46 +908,9 @@ func (tc *DBTestContext) extractTableName(model interface{}) string {
 	// Convert CamelCase to snake_case and pluralize
 	structName := modelType.Name()
 	snakeCase := toSnakeCase(structName)
-	tableName := pluralize(snakeCase)
+	tableName := pluralizer.Plural(snakeCase)
 
 	return tableName
-}
-
-// pluralize returns the plural form of a word.
-//
-// This is a simple pluralization function that handles common English pluralization rules.
-// It's used when inferring table names from model struct names, following GORM's conventions.
-//
-// For more complex cases, models should implement the TableName() method.
-func pluralize(word string) string {
-	// Very simple pluralization - not comprehensive
-	// For real applications, consider using a proper pluralization library
-	// or rely on TableName() method for complex cases
-	if strings.HasSuffix(word, "s") || strings.HasSuffix(word, "ch") ||
-		strings.HasSuffix(word, "sh") || strings.HasSuffix(word, "x") ||
-		strings.HasSuffix(word, "z") {
-		return word + "es"
-	} else if strings.HasSuffix(word, "y") {
-		// Only change y to ies if the y is preceded by a consonant
-		if len(word) > 1 {
-			lastCharBeforeY := word[len(word)-2]
-			isVowel := lastCharBeforeY == 'a' || lastCharBeforeY == 'e' ||
-				lastCharBeforeY == 'i' || lastCharBeforeY == 'o' ||
-				lastCharBeforeY == 'u'
-
-			if !isVowel {
-				return word[:len(word)-1] + "ies"
-			}
-		}
-		// If preceded by a vowel (e.g., "day" -> "days", not "daies")
-		return word + "s"
-	} else if strings.HasSuffix(word, "iz") {
-		return word + "zes"
-	} else if strings.HasSuffix(word, "z") {
-		return word + "zes"
-	} else {
-		return word + "s"
-	}
 }
 
 // BuildRows creates mock SQL rows from a map of column values.

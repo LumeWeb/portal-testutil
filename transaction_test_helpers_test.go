@@ -10,6 +10,111 @@ import (
 	"gorm.io/gorm"
 )
 
+// Test models for the complex validation case
+type TestParent struct {
+	gorm.Model
+	Name string
+}
+
+func (TestParent) TableName() string {
+	return "test_parents"
+}
+
+// Type definitions for enums
+type TestType string
+type TestDirection string
+
+const (
+	TypeOne TestType      = "one"
+	TypeTwo TestType      = "two"
+	DirIn   TestDirection = "in"
+	DirOut  TestDirection = "out"
+)
+
+// TestChild model with relationship AND hooks that call other methods
+type TestChild struct {
+	gorm.Model
+	ParentID  uint
+	Parent    TestParent `gorm:"foreignKey:ParentID"`
+	Type      TestType
+	Direction TestDirection
+	Content   string
+	ThreadID  string
+}
+
+func (TestChild) TableName() string {
+	return "test_children"
+}
+
+// This hook calls another method - key to reproducing the issue
+func (c *TestChild) BeforeCreate(tx *gorm.DB) error {
+	return c.Validate()
+}
+
+func (c *TestChild) BeforeUpdate(tx *gorm.DB) error {
+	return c.Validate()
+}
+
+// Complex validation method with map checks
+func (c *TestChild) Validate() error {
+	// Content validation
+	if c.Content == "" {
+		return fmt.Errorf("content is required")
+	}
+
+	// Type validation using map
+	validTypes := map[TestType]bool{
+		TypeOne: true,
+		TypeTwo: true,
+	}
+	if !validTypes[c.Type] {
+		return fmt.Errorf("invalid type: %s", c.Type)
+	}
+
+	// Direction validation using map
+	validDirs := map[TestDirection]bool{
+		DirIn:  true,
+		DirOut: true,
+	}
+	if !validDirs[c.Direction] {
+		return fmt.Errorf("invalid direction: %s", c.Direction)
+	}
+
+	return nil
+}
+
+// TestModelsWithRelationshipsAndValidation verifies that models with both relationships
+// and validation hooks work correctly in transactions without "Table not set" errors
+func TestModelsWithRelationshipsAndValidation(t *testing.T) {
+	// Create test context
+	tc := NewDBTestContext(t)
+	defer tc.Teardown()
+
+	// Register models with relationships
+	tc.RegisterModel(&TestChild{})
+	tc.RegisterModel(&TestParent{})
+
+	// Mock expectation for create operation
+	tc.ForTable("test_children").ExpectCreate(1)
+
+	// Execute test with complex model - should use our fix
+	err := tc.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
+		child := &TestChild{
+			ParentID:  1,
+			Type:      TypeOne,
+			Direction: DirIn,
+			Content:   "Test content",
+			ThreadID:  "thread-123",
+		}
+
+		// This should succeed without "Table not set" error now
+		return tx.Create(child).Error
+	})
+
+	// Verify no error occurred
+	assert.NoError(t, err, "Create with complex model should succeed")
+}
+
 // TestModelWithCustomTableName represents a model with custom table name
 type TestModelWithCustomTableName struct {
 	gorm.Model
@@ -92,9 +197,8 @@ func TestPublicTransactionAPIWithTableResolution(t *testing.T) {
 	// Setup basic transaction expectations
 	tc.mock.ExpectBegin()
 
-	// Add expectation for the count query that will trigger the callbacks
-	tc.mock.ExpectQuery("SELECT count\\(\\*\\) FROM `custom_table_names`").WillReturnRows(
-		sqlmock.NewRows([]string{"count"}).AddRow(0))
+	// Add expectation for the count query using table helper
+	tc.ForTable("custom_table_names").ExpectCount(0)
 
 	tc.mock.ExpectCommit()
 
@@ -273,29 +377,34 @@ func TestTransactionMultipleOperations(t *testing.T) {
 	// Create test context
 	tc := NewDBTestContext(t)
 	defer tc.Teardown()
-	tc.SkipVerification()
 
 	// Register the model
 	tc.RegisterModel(&TestTransactionModel{})
 
-	// Setup transaction expectations
-	tc.mock.ExpectBegin()
+	// Use our transaction wrapper instead of direct GORM transaction
+	txHelper := tc.Transaction()
 
-	// Create expectation
-	tc.mock.ExpectQuery("INSERT INTO `test_transaction_models`").WillReturnRows(
-		sqlmock.NewRows([]string{"id"}).AddRow(1))
+	// Set up create expectations using table helpers
+	tc.ForTable("test_transaction_models").ExpectCreate(1)
 
-	// Find expectation - using time values instead of strings for GORM model fields
+	// Set up find expectations - using builder for rows
 	now := time.Now()
-	tc.mock.ExpectQuery("SELECT \\* FROM `test_transaction_models` WHERE .+id.+ = .+").WillReturnRows(
-		sqlmock.NewRows([]string{"id", "created_at", "updated_at", "deleted_at", "name", "age"}).
-			AddRow(1, now, now, nil, "test", 30))
+	rows := tc.BuildRows("test_transaction_models", map[string]any{
+		"id":         1,
+		"created_at": now,
+		"updated_at": now,
+		"deleted_at": nil,
+		"name":       "test",
+		"age":        30,
+	})
 
-	// Update expectation (Update() uses a different SQL pattern than Save())
-	tc.mock.ExpectExec("UPDATE `test_transaction_models` SET .+name.+ = .+").WillReturnResult(
-		sqlmock.NewResult(1, 1))
+	// Use HandleStandardFirstRows which is specifically designed for First(id)
+	tc.ForTable("test_transaction_models").ExpectFind().
+		Where("`test_transaction_models`.`id` = ?", 1).
+		HandleStandardFirstRows(rows)
 
-	tc.mock.ExpectCommit()
+	// Set up update expectations - will match GORM's Save() method
+	tc.ForTable("test_transaction_models").ExpectUpdate()
 
 	// Create a test model
 	model := &TestTransactionModel{
@@ -303,8 +412,8 @@ func TestTransactionMultipleOperations(t *testing.T) {
 		Age:  30,
 	}
 
-	// Use direct GORM transaction with multiple operations
-	err := tc.DB().Transaction(func(tx *gorm.DB) error {
+	// Execute the transaction using our helper instead of direct GORM
+	err := txHelper.ExecuteInTransaction(func(tx *gorm.DB) error {
 		// Create
 		if err := tx.Create(model).Error; err != nil {
 			return err

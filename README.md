@@ -864,6 +864,66 @@ func init() {
 }
 ```
 
+## Troubleshooting
+
+### "Table not set" Errors in Transactions
+
+If you encounter errors like `Table not set, please set it like: db.Model(&user) or db.Table("users")` when using GORM transactions, this is typically related to how GORM resolves table names within transactions.
+
+This issue usually occurs with:
+
+1. Models that have relationships (fields with struct types or slices of structs)
+2. Models that have lifecycle hooks (BeforeCreate, BeforeUpdate, etc.) that call other methods
+3. Models with more complex structures
+
+**Solutions:**
+
+1. **Register your models with `RegisterModelWithRelationships`:**
+   ```go
+   // Register both the main model and its relationships
+   testutil.RegisterModelWithRelationships[MyModel](testContext)
+   ```
+
+2. **Use `testContext.Transaction()` instead of direct GORM transactions:**
+   ```go
+   // Use this pattern for consistent table resolution
+   err := testContext.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
+       return tx.Create(&myModel).Error
+   })
+   ```
+
+3. **If all else fails, explicitly set the table name:**
+   ```go
+   err := testContext.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
+       // Explicitly set the table name
+       return tx.Table("my_models").Create(&myModel).Error
+   })
+   ```
+
+The first approach is strongly recommended as it provides the most reliable solution by fully registering your model and its relationships with the test context.
+
+### Callback Registration Warnings
+
+If you see warnings about duplicate callbacks being registered, it's likely that multiple transaction helpers are being created. As of v0.2.1, the library uses unique session IDs to prevent these warnings, but if you're using an older version, upgrade or follow these practices:
+
+1. Create a single transaction helper per test
+2. Reuse the same helper for multiple operations
+
+Example:
+```go
+// Create a single helper for the test
+txHelper := testCtx.Transaction()
+
+// Use it for multiple transaction operations
+err1 := txHelper.ExecuteInTransaction(func(tx *gorm.DB) error {
+    // First operation
+})
+
+err2 := txHelper.ExecuteInTransaction(func(tx *gorm.DB) error {
+    // Second operation
+})
+```
+
 ## Mailer Testing
 
 The `MailerTestHelper` provides utilities for testing email functionality. It implements the `core.MailerService` interface and captures emails instead of sending them.

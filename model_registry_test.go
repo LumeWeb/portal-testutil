@@ -107,31 +107,6 @@ func TestPrefixTableName(t *testing.T) {
 	assert.Equal(t, "prefix_items", alreadyPrefixed)
 }
 
-func TestPluralize(t *testing.T) {
-	testCases := []struct {
-		input    string
-		expected string
-	}{
-		{"user", "users"},
-		{"class", "classes"},
-		{"box", "boxes"},
-		{"dish", "dishes"},
-		{"church", "churches"},
-		{"quiz", "quizes"},
-		{"city", "cities"},
-		{"key", "keys"},
-		{"family", "families"},
-		{"day", "days"},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.input, func(t *testing.T) {
-			result := pluralize(tc.input)
-			assert.Equal(t, tc.expected, result)
-		})
-	}
-}
-
 func TestForTableWithRegisteredModels(t *testing.T) {
 	// Create a test context
 	tc := NewDBTestContext(t)
