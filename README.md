@@ -2,6 +2,47 @@
 
 This package provides a comprehensive testing framework for database-backed services in the portal ecosystem. It is designed to simplify testing by providing a fluent interface for building SQL expectations and a registry pattern for mock services.
 
+## What's New in v0.2.13
+
+### Enhanced Relationship Support with BuildRowsWithRelations
+
+A new method `BuildRowsWithRelations` has been added to properly handle GORM relationships in tests and solve the "unsupported data type: &map[]" error that commonly occurs when testing models with relationships:
+
+```go
+// Set up test data with relationships
+parents := []models.Parent{
+    {
+        Model: gorm.Model{ID: 1, CreatedAt: time.Now(), UpdatedAt: time.Now()},
+        Name:  "Parent 1",
+        Children: []models.Child{
+            {
+                Model:    gorm.Model{ID: 1, CreatedAt: time.Now(), UpdatedAt: time.Now()},
+                Name:     "Child 1",
+                ParentID: 1,
+            },
+        },
+    },
+}
+
+// Use enhanced builder with relationship support
+rows := tc.BuildRowsWithRelations("parents", parents)
+
+// Use in test expectations
+tc.Raw().ExpectQuery("SELECT (.+) FROM `parents`").WillReturnRows(rows)
+
+// Now the query will execute without "unsupported data type: &map[]" errors
+var results []models.Parent
+tc.DB().Find(&results)
+```
+
+This enhancement:
+- Serializes relationship structs to JSON column values
+- Handles belongs-to, has-one, and has-many relationships
+- Maintains proper foreign key references
+- Works with nested relationship structures
+- Avoids the common "unsupported data type: &map[]" error
+- For advanced usage, includes an SQLRelationshipScanner for full relationship reconstruction
+
 ## What's New in v0.2.12
 
 ### Explicit Argument Matching with WithArgs
@@ -12,17 +53,22 @@ You can now explicitly specify the arguments to match in SQL queries with the ne
 // Match exact arguments in parameterized queries
 testCtx.ForTable("users")
     .ExpectCount()
-    .Where("status = ?")
-    .WithArgs("active")
+    .Where("status = ?")          // FIRST set up the SQL pattern with placeholders
+    .WithArgs("active")           // THEN specify the args to match (in same order)
     .ReturnCount(10)
 
 // Especially useful with queryutil.Filter or other WHERE clause generators
 testCtx.ForTable("products")
     .ExpectFind()
-    .Where("category = ? AND price >= ?")
-    .WithArgs("electronics", 199.99)
+    .Where("category = ? AND price >= ?")    // SQL pattern with placeholders
+    .WithArgs("electronics", 199.99)         // Arguments in same order as placeholders
     .ReturnModels(productModels)
 ```
+
+**Important usage notes:**
+1. You **MUST** call `Where()` before `WithArgs()` - the `WithArgs` method only sets the arguments to match and does not create any SQL pattern
+2. The arguments passed to `WithArgs()` must match the order of placeholders in the `Where()` pattern
+3. Common mistake: Using `WithArgs()` without first setting up the pattern with `Where()`
 
 This feature makes it easier to test code that generates SQL queries with parameters, such as filter functions, search utilities, or dynamic query builders.
 

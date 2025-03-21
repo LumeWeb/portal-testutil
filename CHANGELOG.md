@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.13 (2025-03-21)
+
+### Added
+- Added `BuildRowsWithRelations()` method to properly handle GORM relationship fields in tests:
+  - Solves the "unsupported data type: &map[]" error when testing models with relationships
+  - Uses JSON serialization for relationship fields to maintain their structure
+  - Supports belongs-to, has-one, and has-many relationships
+  - Maintains proper foreign key references
+  - Works with nested relationship structures
+  - Includes an `SQLRelationshipScanner` type for advanced usage
+  - Comprehensive documentation and examples for relationship handling
+
 ## 0.2.12 (2025-03-21)
 
 ### Added
@@ -8,6 +20,8 @@
   - Allows exact argument matching for parameterized SQL queries with WHERE clauses
   - Provides better testing of filter conditions and search parameters
   - Great for testing complex query conditions with multiple parameters
+  
+  **Important usage note:** You MUST call `Where()` before `WithArgs()`. The `WithArgs()` method only specifies the arguments to match and does not create the SQL pattern. Correct usage: `.Where("status = ?").WithArgs("active")`
 
 ## 0.2.11 (2025-03-21)
 

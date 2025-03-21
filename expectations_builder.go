@@ -918,6 +918,10 @@ func (c *CountExpectationBuilder) Where(where string, args ...interface{}) *Coun
 
 // WithArgs explicitly specifies the arguments to match in the SQL query.
 //
+// IMPORTANT: This method ONLY sets the arguments to match and does NOT create or modify
+// the SQL pattern. You MUST use Where() first to set up the SQL pattern with placeholders,
+// then use WithArgs() to specify the exact arguments to match.
+//
 // This method allows you to specify exact SQL arguments to match, which is especially
 // useful for parameterized queries with WHERE clauses. By default, the expectation uses
 // sqlmock.AnyArg() to match arguments flexibly, but if you need exact argument matching
@@ -925,26 +929,25 @@ func (c *CountExpectationBuilder) Where(where string, args ...interface{}) *Coun
 //
 // Examples:
 //
-//	// Basic usage with a single argument
+//	// Basic usage with a single argument - WHERE clause MUST be specified first
 //	tc.ForTable("users").
 //		ExpectCount().
-//		Where("status = ?").
-//		WithArgs("active").
+//		Where("status = ?").     // First define the SQL pattern with placeholders
+//		WithArgs("active").      // Then specify the arguments to match
 //		ReturnCount(10)
 //
-//	// Multiple arguments in order
+//	// Multiple arguments in order - arguments must match placeholder order
 //	tc.ForTable("products").
 //		ExpectCount().
-//		Where("category = ? AND price >= ?").
-//		WithArgs("electronics", 199.99).
+//		Where("category = ? AND price >= ?").    // SQL pattern with placeholders
+//		WithArgs("electronics", 199.99).         // Arguments in same order as placeholders
 //		ReturnCount(5)
 //
-//	// Works with queryutil.Filter generated queries
-//	tc.ForTable("test_cases").
-//		ExpectCount().
-//		Where("type = ?").
-//		WithArgs("spam").
-//		ReturnCount(1)
+//	// Common mistake - this will NOT work as WithArgs doesn't set WHERE clause:
+//	// tc.ForTable("items").ExpectCount().WithArgs("active").ReturnCount(10) // ❌ WRONG
+//	//
+//	// Correct usage - always use Where() first:
+//	// tc.ForTable("items").ExpectCount().Where("status = ?").WithArgs("active").ReturnCount(10) // ✓ CORRECT
 func (c *CountExpectationBuilder) WithArgs(args ...interface{}) *CountExpectationBuilder {
 	c.withArgs = args
 	return c
@@ -1244,6 +1247,10 @@ func (f *FindExpectationBuilder) Where(where string, args ...interface{}) *FindE
 
 // WithArgs explicitly specifies the arguments to match in the SQL query.
 //
+// IMPORTANT: This method ONLY sets the arguments to match and does NOT create or modify
+// the SQL pattern. You MUST use Where() first to set up the SQL pattern with placeholders,
+// then use WithArgs() to specify the exact arguments to match.
+//
 // This method allows you to specify exact SQL arguments to match, which is especially
 // useful for parameterized queries with WHERE clauses. By default, the expectation uses
 // sqlmock.AnyArg() to match arguments flexibly, but if you need exact argument matching
@@ -1251,26 +1258,25 @@ func (f *FindExpectationBuilder) Where(where string, args ...interface{}) *FindE
 //
 // Examples:
 //
-//	// Basic usage with a single argument
+//	// Basic usage with a single argument - WHERE clause MUST be specified first
 //	tc.ForTable("users").
 //		ExpectFind().
-//		Where("email = ?").
-//		WithArgs("user@example.com").
+//		Where("email = ?").     // First define the SQL pattern with placeholders
+//		WithArgs("user@example.com").  // Then specify the arguments to match
 //		ReturnModels(users)
 //
-//	// Multiple arguments in order
+//	// Multiple arguments in order - arguments must match placeholder order
 //	tc.ForTable("products").
 //		ExpectFind().
-//		Where("category = ? AND price >= ?").
-//		WithArgs("electronics", 199.99).
+//		Where("category = ? AND price >= ?").    // SQL pattern with placeholders
+//		WithArgs("electronics", 199.99).         // Arguments in same order as placeholders
 //		ReturnModels(productModels)
 //
-//	// Works with queryutil.Filter generated queries
-//	tc.ForTable("posts").
-//		ExpectFind().
-//		Where("author_id = ? AND published_at >= ?").
-//		WithArgs(123, lastWeek).
-//		ReturnRows(rows)
+//	// Common mistake - this will NOT work as WithArgs doesn't set WHERE clause:
+//	// tc.ForTable("items").ExpectFind().WithArgs("active").ReturnRows(rows) // ❌ WRONG
+//	//
+//	// Correct usage - always use Where() first:
+//	// tc.ForTable("items").ExpectFind().Where("status = ?").WithArgs("active").ReturnRows(rows) // ✓ CORRECT
 func (f *FindExpectationBuilder) WithArgs(args ...interface{}) *FindExpectationBuilder {
 	f.withArgs = args
 	return f
