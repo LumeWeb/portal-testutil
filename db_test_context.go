@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unicode"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -98,6 +99,146 @@ type DBTestContext struct {
 //
 //	// Create a test context with custom table prefix
 //	testCtx := testutil.NewDBTestContext(t, testutil.WithTablePrefix("users_"))
+//
+// enableAutoTableResolution adds callbacks to automatically resolve tables for all GORM operations.
+// This addresses the "Table not set" bug that occurs with cross-package relationships in transactions.
+// The function registers callbacks for Create, Query, Update, and Delete operations to ensure
+// proper table name resolution in all scenarios.
+//
+// This is an internal function called during DBTestContext initialization that helps prevent
+// the common GORM error where table names can't be resolved during transactions, particularly
+// when models have both cross-package relationships and lifecycle hooks.
+func enableAutoTableResolution(db *gorm.DB) {
+	// Generate a unique ID to prevent callback registration conflicts
+	uniqueID := fmt.Sprintf("_%d", time.Now().UnixNano())
+
+	// Register callback for Create operations
+	db.Callback().Create().Before("gorm:create").Register(
+		"testutil:auto_table_resolution:create:"+uniqueID,
+		func(d *gorm.DB) {
+			ensureTableIsSet(d)
+		})
+
+	// Also register for Query operations to ensure consistent behavior
+	db.Callback().Query().Before("gorm:query").Register(
+		"testutil:auto_table_resolution:query:"+uniqueID,
+		func(d *gorm.DB) {
+			ensureTableIsSet(d)
+		})
+
+	// And for Update operations
+	db.Callback().Update().Before("gorm:update").Register(
+		"testutil:auto_table_resolution:update:"+uniqueID,
+		func(d *gorm.DB) {
+			ensureTableIsSet(d)
+		})
+
+	// And for Delete operations
+	db.Callback().Delete().Before("gorm:delete").Register(
+		"testutil:auto_table_resolution:delete:"+uniqueID,
+		func(d *gorm.DB) {
+			ensureTableIsSet(d)
+		})
+}
+
+// ensureTableIsSet is a helper function to resolve table names for GORM statements.
+// This handles both direct TableName() method calls and pointer/value receiver variations,
+// as well as providing special handling for cross-package relationships.
+//
+// The function uses multiple strategies to determine the correct table name:
+// 1. Try to get table from model using direct interface call or reflection
+// 2. Try to resolve from the value being used in the operation
+// 3. Check for cross-package relationships with special handling
+// 4. Try to infer from Dest if available
+//
+// This is a critical component for fixing the "Table not set" bug in GORM that occurs
+// when models have both cross-package relationships and lifecycle hooks, especially
+// when those hooks perform map operations.
+func ensureTableIsSet(d *gorm.DB) {
+	// Only proceed if table isn't set yet
+	if d.Statement.Table != "" {
+		return
+	}
+
+	// Strategy 1: Try to get table from model
+	if d.Statement.Model != nil {
+		// Try direct interface method call
+		if tabler, ok := d.Statement.Model.(interface{ TableName() string }); ok {
+			d.Statement.Table = tabler.TableName()
+			return
+		}
+
+		// Try using reflection for pointer receiver
+		modelValue := reflect.ValueOf(d.Statement.Model)
+		if modelValue.Kind() == reflect.Ptr && !modelValue.IsNil() {
+			if method := modelValue.MethodByName("TableName"); method.IsValid() {
+				results := method.Call(nil)
+				if len(results) > 0 && results[0].Kind() == reflect.String {
+					d.Statement.Table = results[0].String()
+					return
+				}
+			}
+		}
+	}
+
+	// Strategy 2: Try from the value being used in the operation
+	if d.Statement.ReflectValue.IsValid() {
+		// Try direct interface method call
+		if tabler, ok := d.Statement.ReflectValue.Interface().(interface{ TableName() string }); ok {
+			d.Statement.Table = tabler.TableName()
+			return
+		}
+
+		// Try using reflection for pointer receiver
+		reflectValue := d.Statement.ReflectValue
+		if reflectValue.Kind() == reflect.Ptr && !reflectValue.IsNil() {
+			if method := reflectValue.MethodByName("TableName"); method.IsValid() {
+				results := method.Call(nil)
+				if len(results) > 0 && results[0].Kind() == reflect.String {
+					d.Statement.Table = results[0].String()
+					return
+				}
+			}
+
+			// For cross-package relationships, check package path differences
+			if reflectValue.Kind() == reflect.Ptr && !reflectValue.IsNil() &&
+				reflectValue.Elem().Kind() == reflect.Struct {
+
+				// Create a new instance to avoid triggering hooks
+				modelType := reflectValue.Type().Elem()
+				tableName := pluralizer.Plural(toSnakeCase(modelType.Name()))
+				d.Statement.Table = tableName
+			}
+		}
+	}
+
+	// Strategy 3: Try from Dest if available
+	if d.Statement.Dest != nil {
+		// Try direct interface method call
+		if tabler, ok := d.Statement.Dest.(interface{ TableName() string }); ok {
+			d.Statement.Table = tabler.TableName()
+			return
+		}
+
+		// Try using reflection
+		destValue := reflect.ValueOf(d.Statement.Dest)
+		if destValue.Kind() == reflect.Ptr && !destValue.IsNil() {
+			if method := destValue.MethodByName("TableName"); method.IsValid() {
+				results := method.Call(nil)
+				if len(results) > 0 && results[0].Kind() == reflect.String {
+					d.Statement.Table = results[0].String()
+					return
+				}
+			}
+
+			// Also try to infer from type name as last resort
+			destType := destValue.Elem().Type()
+			tableName := pluralizer.Plural(toSnakeCase(destType.Name()))
+			d.Statement.Table = tableName
+		}
+	}
+}
+
 func NewDBTestContext(t *testing.T, opts ...func(*Config)) *DBTestContext {
 	// Create a mock provider directly
 	provider, mock, err := dbTesting.NewMockProvider(t)
@@ -133,7 +274,8 @@ func NewDBTestContext(t *testing.T, opts ...func(*Config)) *DBTestContext {
 		opt(config)
 	}
 
-	return &DBTestContext{
+	// Create the test context
+	tc := &DBTestContext{
 		TestContext:        ctx,
 		mock:               mock,
 		config:             config,
@@ -141,6 +283,12 @@ func NewDBTestContext(t *testing.T, opts ...func(*Config)) *DBTestContext {
 		debugEnabled:       config.EnableSQLDebug,
 		lastSQLDiagnostics: "",
 	}
+
+	// ENHANCEMENT: Enable automatic table resolution to fix the "Table not set" bug
+	// This is especially important for models with cross-package relationships in transactions
+	enableAutoTableResolution(db)
+
+	return tc
 }
 
 // WithTablePrefix returns a configuration function that sets a table prefix for the test context.

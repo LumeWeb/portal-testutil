@@ -388,6 +388,11 @@ func RegisterModelWithRelationships[T any](tc *DBTestContext, additionalModels .
 		return
 	}
 
+	// Keep track of cross-package relationships and lifecycle hooks
+	// These are key factors in triggering the "Table not set" bug in GORM
+	hasCrossPackageRelationships := false
+	hasHooks := hasLifecycleHooks(modelType)
+
 	for i := 0; i < modelType.NumField(); i++ {
 		field := modelType.Field(i)
 
@@ -409,6 +414,11 @@ func RegisterModelWithRelationships[T any](tc *DBTestContext, additionalModels .
 			// Create an instance of the related type
 			relatedInstance := reflect.New(fieldType).Interface()
 			tc.RegisterModel(relatedInstance)
+
+			// Check if this is a cross-package relationship
+			if fieldType.PkgPath() != modelType.PkgPath() {
+				hasCrossPackageRelationships = true
+			}
 		}
 
 		// Handle slice of structs (one-to-many relationships)
@@ -422,9 +432,61 @@ func RegisterModelWithRelationships[T any](tc *DBTestContext, additionalModels .
 				// Create an instance of the related slice element type
 				relatedInstance := reflect.New(elemType).Interface()
 				tc.RegisterModel(relatedInstance)
+
+				// Check if this is a cross-package relationship
+				if elemType.PkgPath() != modelType.PkgPath() {
+					hasCrossPackageRelationships = true
+				}
 			}
 		}
 	}
+
+	// Special handling for models with both cross-package relationships and hooks
+	// This is the combination most likely to trigger the "Table not set" bug in GORM
+	if hasCrossPackageRelationships && hasHooks {
+		// Preload the model and relationships to prepare GORM's schema cache
+		// This helps with GORM table resolution later by ensuring the Schema is populated
+		// before any transactions are executed
+		var instance T
+		db := tc.DB().Model(&instance)
+
+		// Preload but with special handling to avoid validation errors
+		// This just sets up GORM's schema cache with the correct table name information
+		db.Limit(1).Find(&instance)
+
+		// Reset the statement to clear any cached state that could later
+		// interfere with table resolution in transactions
+		// This is critical to prevent state leakage between operations
+		db.Statement = &gorm.Statement{DB: db.Session(&gorm.Session{})}
+	}
+}
+
+// hasLifecycleHooks determines if a model type has GORM lifecycle hooks
+// that might trigger the "Table not set" bug with cross-package relationships.
+//
+// This function checks for common GORM lifecycle hooks like BeforeCreate, BeforeUpdate,
+// BeforeSave, and Validate. When these hooks access map fields or perform complex
+// operations, they can interfere with GORM's internal table resolution during transactions,
+// especially when combined with cross-package relationships.
+//
+// The presence of lifecycle hooks is one of the key factors in triggering the
+// "Table not set" bug, particularly when:
+// 1. The model has cross-package relationships (fields from other packages)
+// 2. The hooks perform operations on maps or complex data structures
+// 3. The operation is performed within a transaction
+//
+// The function returns true if any of the common GORM lifecycle hooks are detected.
+func hasLifecycleHooks(modelType reflect.Type) bool {
+	// Convert to pointer type to check pointer receiver methods
+	ptrType := reflect.PtrTo(modelType)
+
+	// Check for common GORM lifecycle hooks
+	_, hasBeforeCreate := ptrType.MethodByName("BeforeCreate")
+	_, hasBeforeUpdate := ptrType.MethodByName("BeforeUpdate")
+	_, hasBeforeSave := ptrType.MethodByName("BeforeSave")
+	_, hasValidate := ptrType.MethodByName("Validate")
+
+	return hasBeforeCreate || hasBeforeUpdate || hasBeforeSave || hasValidate
 }
 
 // isBuiltinType checks if a type is a Go built-in type or common stdlib type

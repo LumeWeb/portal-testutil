@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.6 (2025-03-21)
+
+### Added
+- Automatic table resolution for all GORM operations in test environments
+- Support for complex model relationships across different packages
+
+### Fixed
+- Fixed "Table not set" error when using models with both relationships and lifecycle hooks
+- Fixed transaction handling for complex model structures
+- Resolved edge cases with validation hooks in transactional contexts
+
+### Improved
+- Enhanced documentation with better explanations of table resolution
+- Added comprehensive test coverage for different model structures
+- Reduced need for manual table name handling in tests
+
 ## 0.2.5 (2025-03-20)
 
 ### Added

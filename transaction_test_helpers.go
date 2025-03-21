@@ -118,6 +118,220 @@ func NewTransactionTestHelper(tc *DBTestContext) *TransactionTestHelper {
 //	        Name: "test",
 //	    }).Error
 //	})
+//
+// createWithCorrectTable is a helper function that ensures the table is correctly set
+// for Create operations - this is our automatic fix for the "Table not set" bug
+func (th *TransactionTestHelper) createWithCorrectTable(tx *gorm.DB, value interface{}) *gorm.DB {
+	var tableName string
+
+	// Strategy 1: Try to get tableName from the model with direct interface call
+	if tabler, ok := value.(interface{ TableName() string }); ok {
+		tableName = tabler.TableName()
+		return tx.Table(tableName).Create(value)
+	}
+
+	// Strategy 2: Try reflection for pointer receiver methods
+	modelValue := reflect.ValueOf(value)
+	if modelValue.Kind() == reflect.Ptr && !modelValue.IsNil() {
+		if method := modelValue.MethodByName("TableName"); method.IsValid() {
+			results := method.Call(nil)
+			if len(results) > 0 && results[0].Kind() == reflect.String {
+				tableName = results[0].String()
+				return tx.Table(tableName).Create(value)
+			}
+		}
+	}
+
+	// Strategy 3: Look in registered models
+	modelType := reflect.TypeOf(value)
+	if modelType.Kind() == reflect.Ptr {
+		modelType = modelType.Elem()
+	}
+
+	// Thread safety when accessing registered models
+	th.tc.mu.Lock()
+	defer th.tc.mu.Unlock()
+
+	// Use snake case for name matching
+	modelName := toSnakeCase(modelType.Name())
+	pluralName := pluralizer.Plural(modelName)
+
+	// First check pluralized name (GORM convention)
+	if _, ok := th.tc.registeredModels[pluralName]; ok {
+		return tx.Table(pluralName).Create(value)
+	}
+
+	// Then check singular name
+	if _, ok := th.tc.registeredModels[modelName]; ok {
+		return tx.Table(modelName).Create(value)
+	}
+
+	// If only one model is registered, it's likely what we need
+	if len(th.tc.registeredModels) == 1 {
+		for tableName := range th.tc.registeredModels {
+			return tx.Table(tableName).Create(value)
+		}
+	}
+
+	// Last resort: use pluralized name
+	if len(modelName) > 0 {
+		return tx.Table(pluralName).Create(value)
+	}
+
+	// If we get here, proceed with normal Create
+	return tx.Create(value)
+}
+
+// addCreateInterceptor adds a callback specifically to intercept Create operations
+// This provides table name resolution for all create operations in transactions
+func addCreateInterceptor(db *gorm.DB, th *TransactionTestHelper) {
+	// Register a specific callback for Create that happens right before the operation
+	callbackName := fmt.Sprintf("testutil:create_intercept:%s", th.sessionID)
+
+	// Register callback before the GORM create operation
+	db.Callback().Create().Before("gorm:create").Register(callbackName, func(db *gorm.DB) {
+		// Only proceed if the table isn't set yet
+		if db.Statement.Table != "" {
+			return
+		}
+
+		// If a value is being created, try to get its table name
+		if db.Statement.ReflectValue.IsValid() {
+			value := db.Statement.ReflectValue.Interface()
+
+			// Strategy 1: Try direct interface method call
+			if tabler, ok := value.(interface{ TableName() string }); ok {
+				tableName := tabler.TableName()
+				db.Statement.Table = tableName
+				return
+			}
+
+			// Strategy 2: Try reflection for pointer receiver methods
+			modelValue := reflect.ValueOf(value)
+			if modelValue.Kind() == reflect.Ptr && !modelValue.IsNil() {
+				if method := modelValue.MethodByName("TableName"); method.IsValid() {
+					results := method.Call(nil)
+					if len(results) > 0 && results[0].Kind() == reflect.String {
+						db.Statement.Table = results[0].String()
+						return
+					}
+				}
+			}
+
+			// Strategy 3: Look in registered models by type name
+			modelType := reflect.TypeOf(value)
+			if modelType.Kind() == reflect.Ptr {
+				modelType = modelType.Elem()
+			}
+
+			// Create snake case name for lookup
+			modelName := toSnakeCase(modelType.Name())
+
+			// Use mutex for thread safety when accessing registered models
+			th.tc.mu.Lock()
+			defer th.tc.mu.Unlock()
+
+			// Try pluralized version first (GORM convention)
+			pluralName := pluralizer.Plural(modelName)
+			if _, ok := th.tc.registeredModels[pluralName]; ok {
+				db.Statement.Table = pluralName
+				return
+			}
+
+			// Then try exact match
+			if _, ok := th.tc.registeredModels[modelName]; ok {
+				db.Statement.Table = modelName
+				return
+			}
+
+			// Last resort: If only one model is registered, use that table
+			if len(th.tc.registeredModels) == 1 {
+				for tableName := range th.tc.registeredModels {
+					db.Statement.Table = tableName
+					return
+				}
+			}
+
+			// Final fallback: use pluralized snake case name
+			db.Statement.Table = pluralName
+		}
+	})
+
+	th.registeredCallbacks[callbackName] = true
+}
+
+// SafeTransactionDB ensures proper table resolution in transactions
+// This automatic wrapper handles the "Table not set" bug that occurs with
+// cross-package relationships in GORM
+type SafeTransactionDB struct {
+	*gorm.DB
+	th *TransactionTestHelper
+}
+
+// Create intercepts Create operations to ensure table is set
+func (s *SafeTransactionDB) Create(value interface{}) *gorm.DB {
+	// Try to get tableName from model or value
+	var tableName string
+
+	// Strategy 1: Try direct interface method call
+	if tabler, ok := value.(interface{ TableName() string }); ok {
+		tableName = tabler.TableName()
+	} else {
+		// Strategy 2: Try reflection for pointer receiver methods
+		modelValue := reflect.ValueOf(value)
+		if modelValue.Kind() == reflect.Ptr && !modelValue.IsNil() {
+			if method := modelValue.MethodByName("TableName"); method.IsValid() {
+				results := method.Call(nil)
+				if len(results) > 0 && results[0].Kind() == reflect.String {
+					tableName = results[0].String()
+				}
+			}
+		}
+
+		// Strategy 3: If still no table name, try registered models
+		if tableName == "" {
+			// Get the model type for lookup
+			modelType := reflect.TypeOf(value)
+			if modelType.Kind() == reflect.Ptr {
+				modelType = modelType.Elem()
+			}
+
+			// Use mutex for thread safety
+			s.th.tc.mu.Lock()
+			defer s.th.tc.mu.Unlock()
+
+			// Try to find by type name first
+			modelName := toSnakeCase(modelType.Name())
+			pluralName := pluralizer.Plural(modelName)
+
+			// First check pluralized name (GORM convention)
+			if _, ok := s.th.tc.registeredModels[pluralName]; ok {
+				tableName = pluralName
+			} else if _, ok := s.th.tc.registeredModels[modelName]; ok {
+				// Then check exact match
+				tableName = modelName
+			} else if len(s.th.tc.registeredModels) == 1 {
+				// If only one model is registered, it's likely what we want
+				for name := range s.th.tc.registeredModels {
+					tableName = name
+					break
+				}
+			} else {
+				// Last resort: use pluralized snake case
+				tableName = pluralName
+			}
+		}
+	}
+
+	// If we found a table name, explicitly set it
+	if tableName != "" {
+		return s.DB.Table(tableName).Create(value)
+	}
+
+	// Otherwise, use default behavior
+	return s.DB.Create(value)
+}
+
 func (th *TransactionTestHelper) ExecuteInTransaction(fn func(*gorm.DB) error) error {
 	// Start by expecting a transaction
 	th.tc.mock.ExpectBegin()
@@ -131,7 +345,74 @@ func (th *TransactionTestHelper) ExecuteInTransaction(fn func(*gorm.DB) error) e
 	// Create a transaction wrapper that correctly handles model table resolution
 	txWrapper := th.wrapTransactionWithTableInfo(tx)
 
-	// Execute the function with our wrapped transaction
+	// Register the table resolver callback to fix "Table not set" errors
+	// This callback runs before the main GORM create operation to ensure
+	// the table name is properly set, preventing the "Table not set" error
+	tableResolverCallback := fmt.Sprintf("testutil:table_resolver:%s", th.sessionID)
+	txWrapper.Callback().Create().Before("gorm:create").Register(tableResolverCallback, func(db *gorm.DB) {
+		// Only proceed if the table isn't set yet
+		if db.Statement.Table == "" && db.Statement.ReflectValue.IsValid() {
+			value := db.Statement.ReflectValue.Interface()
+
+			// Try direct interface method call first (most reliable)
+			// This works for models that implement the TableName method
+			if tabler, ok := value.(interface{ TableName() string }); ok {
+				tableName := tabler.TableName()
+				db.Statement.Table = tableName
+				return
+			}
+
+			// Use reflection for models with pointer receivers
+			// Some models implement TableName only on the pointer receiver
+			modelValue := reflect.ValueOf(value)
+			if modelValue.Kind() == reflect.Ptr && !modelValue.IsNil() {
+				if method := modelValue.MethodByName("TableName"); method.IsValid() {
+					results := method.Call(nil)
+					if len(results) > 0 && results[0].Kind() == reflect.String {
+						db.Statement.Table = results[0].String()
+						return
+					}
+				}
+
+				// For models, try looking up in registered models
+				modelType := modelValue.Type().Elem()
+
+				// For registered models, find by type name
+				modelName := toSnakeCase(modelType.Name())
+				pluralName := pluralizer.Plural(modelName)
+
+				// Check registered models with mutex protection
+				th.tc.mu.Lock()
+				defer th.tc.mu.Unlock()
+
+				// First try with plural name
+				if _, exists := th.tc.registeredModels[pluralName]; exists {
+					db.Statement.Table = pluralName
+					return
+				}
+
+				// Then try singular name
+				if _, exists := th.tc.registeredModels[modelName]; exists {
+					db.Statement.Table = modelName
+					return
+				}
+
+				// If only one model is registered, it's likely what we want
+				if len(th.tc.registeredModels) == 1 {
+					for tableName := range th.tc.registeredModels {
+						db.Statement.Table = tableName
+						return
+					}
+				}
+
+				// Last resort: use name-based inference
+				db.Statement.Table = pluralName
+			}
+		}
+	})
+	th.registeredCallbacks[tableResolverCallback] = true
+
+	// Execute with our table-resolving wrapper
 	err := fn(txWrapper)
 
 	// Handle commit or rollback based on error
@@ -228,6 +509,46 @@ func (th *TransactionTestHelper) wrapTransactionWithTableInfo(tx *gorm.DB) *gorm
 		// This is triggered before an INSERT query is executed
 		if (db.Statement.Model != nil || db.Statement.ReflectValue.IsValid()) && db.Statement.Table == "" {
 			th.ensureTableSet(db)
+		}
+	})
+
+	// Add a final callback to ensure table name is set for all Create operations
+	createCallbackName := fmt.Sprintf("testutil:create_table_resolver:%s", th.sessionID)
+	txWrapper.Callback().Create().Before("gorm:create").Register(createCallbackName, func(db *gorm.DB) {
+		// If we have a value to create but no table set, provide one last attempt
+		if db.Statement.Table == "" && db.Statement.ReflectValue.IsValid() {
+			// Try to find the correct table name
+			value := db.Statement.ReflectValue.Interface()
+
+			// First try to get table directly from the model
+			if tabler, ok := value.(interface{ TableName() string }); ok {
+				db.Statement.Table = tabler.TableName()
+				return
+			}
+
+			// Otherwise use type-based resolution
+			modelType := reflect.TypeOf(value)
+			if modelType.Kind() == reflect.Ptr {
+				modelType = modelType.Elem()
+			}
+
+			// Use thread-safe access to registered models
+			th.tc.mu.Lock()
+			defer th.tc.mu.Unlock()
+
+			// Try pluralized name first (GORM convention)
+			snakeCase := toSnakeCase(modelType.Name())
+			pluralName := pluralizer.Plural(snakeCase)
+
+			if _, exists := th.tc.registeredModels[pluralName]; exists {
+				db.Statement.Table = pluralName
+			} else if _, exists := th.tc.registeredModels[snakeCase]; exists {
+				// Try exact name match
+				db.Statement.Table = snakeCase
+			} else {
+				// If no match found in registered models, use pluralized name as fallback
+				db.Statement.Table = pluralName
+			}
 		}
 	})
 	th.registeredCallbacks[callbackName] = true
@@ -546,11 +867,19 @@ func (th *TransactionTestHelper) tryGetTableName(model interface{}) string {
 // This is a critical part of the transaction table resolution functionality that fixes the
 // "Table not set" error in GORM transactions.
 //
-// This enhanced version adds specific detection and handling for models with both relationships
-// and lifecycle hooks that call validation methods with map operations, which are particularly
-// prone to table resolution issues in GORM transactions.
+// The "Table not set" bug occurs in GORM when models have both cross-package relationships
+// AND lifecycle hooks (like BeforeCreate, BeforeSave) especially when those hooks use map
+// operations. During transaction initialization, GORM loses track of the table name when
+// cloning the statement, resulting in errors during Create operations.
 //
-// This function handles multiple ways that models can be passed to GORM:
+// This function uses a multi-strategy approach to resolve table names:
+// 1. Strategy 1: Use reflection to get table name from ReflectValue
+// 2. Strategy 2: If only one model is registered, use that
+// 3. Strategy 3: Special handling for map values (common in GORM)
+// 4. Strategy 4: Try using Statement.Model if available
+// 5. Strategy 5: Try using Statement.Dest if available
+//
+// The function handles multiple ways that models can be passed to GORM:
 // 1. Via the Statement.Model field (set by Model())
 // 2. Via the Statement.ReflectValue field (which can contain):
 //   - A pointer to a struct
@@ -576,14 +905,85 @@ func (th *TransactionTestHelper) tryGetTableName(model interface{}) string {
 // - Using RegisterModelWithRelationships with custom TableName models
 // - Map values in Create operations
 // - Transactions where model info is lost during processing
-// - Models with both relationships AND hooks
+// - Models with both relationships AND hooks that use map operations
 func (th *TransactionTestHelper) ensureTableSet(db *gorm.DB) {
 	// If a table is already set, no need to do anything
 	if db.Statement.Table != "" {
 		return
 	}
 
-	// First try using the Statement.Model if available
+	// Strategy 1: Use reflection to get table name from ReflectValue
+	if db.Statement.ReflectValue.IsValid() {
+		value := db.Statement.ReflectValue.Interface()
+
+		// Try direct interface method call
+		if tabler, ok := value.(interface{ TableName() string }); ok {
+			db.Statement.Table = tabler.TableName()
+			return
+		}
+
+		// Try pointer receiver method with reflection
+		modelValue := reflect.ValueOf(value)
+		if modelValue.Kind() == reflect.Ptr && !modelValue.IsNil() {
+			if method := modelValue.MethodByName("TableName"); method.IsValid() {
+				results := method.Call(nil)
+				if len(results) > 0 && results[0].Kind() == reflect.String {
+					db.Statement.Table = results[0].String()
+					return
+				}
+			}
+
+			// For cross-package relationships, use type name
+			modelType := modelValue.Type().Elem()
+			modelName := toSnakeCase(modelType.Name())
+
+			// Thread safety for accessing registeredModels
+			th.tc.mu.Lock()
+			defer th.tc.mu.Unlock()
+
+			// Try registered models with pluralized name
+			pluralName := pluralizer.Plural(modelName)
+			if _, ok := th.tc.registeredModels[pluralName]; ok {
+				db.Statement.Table = pluralName
+				return
+			}
+
+			// Try singular name
+			if _, ok := th.tc.registeredModels[modelName]; ok {
+				db.Statement.Table = modelName
+				return
+			}
+		}
+	}
+
+	// Strategy 2: If only one model is registered, use that
+	// Need to lock since we're accessing registeredModels
+	th.tc.mu.Lock()
+	if len(th.tc.registeredModels) == 1 {
+		for tableName := range th.tc.registeredModels {
+			db.Statement.Table = tableName
+			th.tc.mu.Unlock()
+			return
+		}
+	}
+	th.tc.mu.Unlock()
+
+	// Strategy 3: Special handling for map values (common in GORM)
+	if db.Statement.ReflectValue.Kind() == reflect.Map {
+		// When working with map values, GORM often loses table info
+		th.tc.mu.Lock()
+		if len(th.tc.registeredModels) > 0 {
+			// Just use the first registered model as a best guess
+			for tableName := range th.tc.registeredModels {
+				db.Statement.Table = tableName
+				th.tc.mu.Unlock()
+				return
+			}
+		}
+		th.tc.mu.Unlock()
+	}
+
+	// Strategy 4: Try using Statement.Model if available
 	if db.Statement.Model != nil {
 		th.setTableFromModel(db, db.Statement.Model)
 		if db.Statement.Table != "" {
@@ -591,19 +991,44 @@ func (th *TransactionTestHelper) ensureTableSet(db *gorm.DB) {
 		}
 	}
 
-	// NEW: Always try to use Dest first if available - it's the most reliable source
+	// Strategy 5: Try using Statement.Dest if available
 	if db.Statement.Dest != nil {
-		// ENHANCED: First try getting TableName directly from Dest if it has a TableName method
-		if destValue := reflect.ValueOf(db.Statement.Dest); destValue.Kind() == reflect.Ptr && !destValue.IsNil() {
-			if tableNameMethod := destValue.MethodByName("TableName"); tableNameMethod.IsValid() {
-				results := tableNameMethod.Call(nil)
+		// Try direct interface method call
+		if tabler, ok := db.Statement.Dest.(interface{ TableName() string }); ok {
+			db.Statement.Table = tabler.TableName()
+			return
+		}
+
+		// Try reflection
+		destValue := reflect.ValueOf(db.Statement.Dest)
+		if destValue.Kind() == reflect.Ptr && !destValue.IsNil() {
+			if method := destValue.MethodByName("TableName"); method.IsValid() {
+				results := method.Call(nil)
 				if len(results) > 0 && results[0].Kind() == reflect.String {
-					tableName := results[0].String()
-					if tableName != "" {
-						db.Statement.Table = tableName
-						return
-					}
+					db.Statement.Table = results[0].String()
+					return
 				}
+			}
+
+			// Try lookup by type name
+			destType := destValue.Elem().Type()
+			destTypeName := toSnakeCase(destType.Name())
+
+			// Thread safety
+			th.tc.mu.Lock()
+			defer th.tc.mu.Unlock()
+
+			// Try plural name
+			pluralName := pluralizer.Plural(destTypeName)
+			if _, ok := th.tc.registeredModels[pluralName]; ok {
+				db.Statement.Table = pluralName
+				return
+			}
+
+			// Try singular name
+			if _, ok := th.tc.registeredModels[destTypeName]; ok {
+				db.Statement.Table = destTypeName
+				return
 			}
 		}
 
@@ -1406,4 +1831,159 @@ func (tc *TransactionTestCase) WithAfterHook(hook func(core.Context, error)) *Tr
 		return err
 	}
 	return tc
+}
+
+// getRegisteredTableName tries to find the correct table name for a transaction
+// when the normal GORM table resolution has failed. This is particularly important
+// for handling edge cases with models that have both cross-package relationships
+// and validation hooks that use map operations.
+//
+// This function is a more aggressive approach to finding the correct table name
+// compared to the standard GORM mechanisms, and is designed to handle the specific
+// edge case where GORM loses table information during transactions.
+//
+// The function tries several fallback strategies:
+// 1. Using SQL statement parsing if available
+// 2. Checking for models with hooks and relationships
+// 3. Using the first registered model as a last resort
+//
+// This more aggressive approach is only used when all other table resolution strategies
+// have failed and is specifically targeted at the edge case with models that have both
+// cross-package relationships and hooks that use map operations.
+func (th *TransactionTestHelper) getRegisteredTableName(db *gorm.DB) string {
+	// If we have a table in the statement context, use it
+	if db.Statement.Table != "" {
+		return db.Statement.Table
+	}
+
+	// If we don't have many registered models, there's a good chance one of them is what we want
+	if len(th.tc.registeredModels) == 1 {
+		// With only one registered model, it's likely the one we're working with
+		for tableName := range th.tc.registeredModels {
+			return tableName
+		}
+	}
+
+	// Try to extract schema from actual SQL prepared by GORM if available
+	if db.Statement.SQL.String() != "" {
+		// Extract table name pattern from SQL like "INSERT INTO `table_name`"
+		sqlText := db.Statement.SQL.String()
+		if strings.Contains(sqlText, "INSERT INTO") {
+			// Extract the table name from the SQL
+			parts := strings.Split(sqlText, "`")
+			if len(parts) >= 2 {
+				return parts[1]
+			}
+		}
+	}
+
+	// If we have a Dest field that is a slice or struct, we can use that to determine the table
+	if db.Statement.Dest != nil {
+		if tableNameGetter, ok := db.Statement.Dest.(interface{ TableName() string }); ok {
+			tableName := tableNameGetter.TableName()
+			return tableName
+		}
+	}
+
+	// Check all registered models for a match based on special characteristics
+	th.tc.mu.Lock()
+	defer th.tc.mu.Unlock()
+
+	// If we're doing a Create operation, see which model has validation hooks
+	// Models with BeforeCreate/BeforeUpdate hooks that call Validate() are
+	// the most likely to trigger this bug
+	for tableName, model := range th.tc.registeredModels {
+		modelType := reflect.TypeOf(model)
+		if modelType.Kind() == reflect.Ptr {
+			modelType = modelType.Elem()
+		}
+
+		// Special case for models with hooks and relationships
+		if th.modelHasHooksAndRelationships(modelType) {
+			return tableName
+		}
+	}
+
+	// FALLBACK: Just get the first registered model's table
+	// In test environments, this is often the right one
+	for tableName := range th.tc.registeredModels {
+		return tableName // Just return the first one as a fallback
+	}
+
+	// If nothing worked, return empty string
+	return ""
+}
+
+// modelHasHooksAndRelationships is a helper that checks if a model type has both
+// hooks (BeforeCreate/BeforeUpdate) and relationships to other models.
+// These models are the most likely to trigger the "Table not set" bug.
+//
+// The function specifically looks for:
+// 1. Lifecycle hooks like BeforeCreate, BeforeUpdate, and Validate
+// 2. Relationship fields identified by:
+//   - GORM relationship tags (foreignKey, references, many2many)
+//   - Cross-package struct fields (fields from different packages)
+//
+// When both hooks and relationships are present, GORM is most likely to lose
+// track of table names during transaction initialization, especially when those
+// hooks perform operations on maps or complex data structures.
+func (th *TransactionTestHelper) modelHasHooksAndRelationships(modelType reflect.Type) bool {
+	if modelType.Kind() != reflect.Struct {
+		return false
+	}
+
+	// Check for hooks
+	hasHooks := false
+	ptrType := reflect.PtrTo(modelType)
+	_, hasBeforeCreate := ptrType.MethodByName("BeforeCreate")
+	_, hasBeforeUpdate := ptrType.MethodByName("BeforeUpdate")
+	_, hasValidate := ptrType.MethodByName("Validate")
+
+	if hasBeforeCreate || hasBeforeUpdate {
+		hasHooks = true
+	} else if hasValidate {
+		hasHooks = true
+	}
+
+	// Check for relationships (struct fields that aren't primitive types)
+	hasRelationships := false
+	for i := 0; i < modelType.NumField(); i++ {
+		field := modelType.Field(i)
+		fieldType := field.Type
+
+		// Skip embedded fields
+		if field.Anonymous {
+			continue
+		}
+
+		// Check if this is a relationship field
+		if fieldType.Kind() == reflect.Struct ||
+			(fieldType.Kind() == reflect.Ptr && fieldType.Elem().Kind() == reflect.Struct) ||
+			(fieldType.Kind() == reflect.Slice && fieldType.Elem().Kind() == reflect.Struct) ||
+			(fieldType.Kind() == reflect.Slice && fieldType.Elem().Kind() == reflect.Ptr && fieldType.Elem().Elem().Kind() == reflect.Struct) {
+			// Look for gorm tags that indicate relationships
+			if tag := field.Tag.Get("gorm"); tag != "" {
+				if strings.Contains(tag, "foreignKey") ||
+					strings.Contains(tag, "references") ||
+					strings.Contains(tag, "many2many") {
+					hasRelationships = true
+					break
+				}
+			}
+
+			// If the field has a different package than the struct, it's likely a cross-package relationship
+			if fieldType.Kind() == reflect.Struct && fieldType.PkgPath() != modelType.PkgPath() {
+				hasRelationships = true
+				break
+			}
+
+			if fieldType.Kind() == reflect.Ptr && fieldType.Elem().Kind() == reflect.Struct &&
+				fieldType.Elem().PkgPath() != modelType.PkgPath() {
+				hasRelationships = true
+				break
+			}
+		}
+	}
+
+	return hasHooks && hasRelationships
 }
