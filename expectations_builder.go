@@ -897,7 +897,8 @@ type CountExpectationBuilder struct {
 	builder    *ExpectationsBuilder
 	where      string
 	args       []interface{}
-	columnName string // Column name for the count result (defaults to "count(*)" for ORM compatibility)
+	columnName string        // Column name for the count result (defaults to "count(*)" for ORM compatibility)
+	withArgs   []interface{} // Arguments to match in ExpectQuery
 }
 
 // Where adds a WHERE clause to the count expectation.
@@ -912,6 +913,40 @@ type CountExpectationBuilder struct {
 func (c *CountExpectationBuilder) Where(where string, args ...interface{}) *CountExpectationBuilder {
 	c.where = where
 	c.args = args
+	return c
+}
+
+// WithArgs explicitly specifies the arguments to match in the SQL query.
+//
+// This method allows you to specify exact SQL arguments to match, which is especially
+// useful for parameterized queries with WHERE clauses. By default, the expectation uses
+// sqlmock.AnyArg() to match arguments flexibly, but if you need exact argument matching
+// (e.g., for testing filter conditions or search parameters), use this method.
+//
+// Examples:
+//
+//	// Basic usage with a single argument
+//	tc.ForTable("users").
+//		ExpectCount().
+//		Where("status = ?").
+//		WithArgs("active").
+//		ReturnCount(10)
+//
+//	// Multiple arguments in order
+//	tc.ForTable("products").
+//		ExpectCount().
+//		Where("category = ? AND price >= ?").
+//		WithArgs("electronics", 199.99).
+//		ReturnCount(5)
+//
+//	// Works with queryutil.Filter generated queries
+//	tc.ForTable("test_cases").
+//		ExpectCount().
+//		Where("type = ?").
+//		WithArgs("spam").
+//		ReturnCount(1)
+func (c *CountExpectationBuilder) WithArgs(args ...interface{}) *CountExpectationBuilder {
+	c.withArgs = args
 	return c
 }
 
@@ -984,8 +1019,16 @@ func (c *CountExpectationBuilder) ReturnCount(count int64) *ExpectationsBuilder 
 	// Execute the query expectation
 	exp := c.builder.tc.mock.ExpectQuery(pattern)
 
-	// Don't check arguments - GORM might add more than we expect
-	if len(c.args) > 0 {
+	// Check if explicit arguments were provided via WithArgs()
+	if len(c.withArgs) > 0 {
+		// Use explicitly provided arguments
+		driverArgs := make([]driver.Value, len(c.withArgs))
+		for i, arg := range c.withArgs {
+			driverArgs[i] = arg
+		}
+		exp.WithArgs(driverArgs...)
+	} else if len(c.args) > 0 {
+		// Don't check arguments - GORM might add more than we expect
 		// For each argument in our list, add a sqlmock.AnyArg()
 		anyArgs := make([]driver.Value, len(c.args))
 		for i := range anyArgs {
@@ -1075,8 +1118,16 @@ func (c *CountExpectationBuilder) ReturnError(err error) *ExpectationsBuilder {
 	// Execute the query expectation
 	exp := c.builder.tc.mock.ExpectQuery(pattern)
 
-	// Don't check arguments - GORM might add more than we expect
-	if len(c.args) > 0 {
+	// Check if explicit arguments were provided via WithArgs()
+	if len(c.withArgs) > 0 {
+		// Use explicitly provided arguments
+		driverArgs := make([]driver.Value, len(c.withArgs))
+		for i, arg := range c.withArgs {
+			driverArgs[i] = arg
+		}
+		exp.WithArgs(driverArgs...)
+	} else if len(c.args) > 0 {
+		// Don't check arguments - GORM might add more than we expect
 		// For each argument in our list, add a sqlmock.AnyArg()
 		anyArgs := make([]driver.Value, len(c.args))
 		for i := range anyArgs {
@@ -1174,9 +1225,10 @@ func (t *TransactionExpectationBuilder) Rollback() *ExpectationsBuilder {
 
 // FindExpectationBuilder builds expectations for a find operation
 type FindExpectationBuilder struct {
-	builder *ExpectationsBuilder
-	where   string
-	args    []interface{}
+	builder  *ExpectationsBuilder
+	where    string
+	args     []interface{}
+	withArgs []interface{} // Arguments to match in ExpectQuery
 
 	// Special flags for common GORM operations
 	isFirst       bool // Indicates this query will be used with First()
@@ -1187,6 +1239,40 @@ type FindExpectationBuilder struct {
 func (f *FindExpectationBuilder) Where(where string, args ...interface{}) *FindExpectationBuilder {
 	f.where = where
 	f.args = args
+	return f
+}
+
+// WithArgs explicitly specifies the arguments to match in the SQL query.
+//
+// This method allows you to specify exact SQL arguments to match, which is especially
+// useful for parameterized queries with WHERE clauses. By default, the expectation uses
+// sqlmock.AnyArg() to match arguments flexibly, but if you need exact argument matching
+// (e.g., for testing filter conditions or search parameters), use this method.
+//
+// Examples:
+//
+//	// Basic usage with a single argument
+//	tc.ForTable("users").
+//		ExpectFind().
+//		Where("email = ?").
+//		WithArgs("user@example.com").
+//		ReturnModels(users)
+//
+//	// Multiple arguments in order
+//	tc.ForTable("products").
+//		ExpectFind().
+//		Where("category = ? AND price >= ?").
+//		WithArgs("electronics", 199.99).
+//		ReturnModels(productModels)
+//
+//	// Works with queryutil.Filter generated queries
+//	tc.ForTable("posts").
+//		ExpectFind().
+//		Where("author_id = ? AND published_at >= ?").
+//		WithArgs(123, lastWeek).
+//		ReturnRows(rows)
+func (f *FindExpectationBuilder) WithArgs(args ...interface{}) *FindExpectationBuilder {
+	f.withArgs = args
 	return f
 }
 
@@ -1566,8 +1652,16 @@ func (f *FindExpectationBuilder) ReturnRows(rows *sqlmock.Rows) *ExpectationsBui
 	// Store expected args for potential diagnostics
 	expectedArgs := make([]interface{}, 0)
 
-	// Handle arguments based on query complexity
-	if isFirstLikeQuery && !f.builder.tc.tableHasSoftDelete(f.builder.table) && f.where != "" {
+	// Check if explicit arguments were provided via WithArgs()
+	if len(f.withArgs) > 0 {
+		// Use explicitly provided arguments
+		driverArgs := make([]driver.Value, len(f.withArgs))
+		for i, arg := range f.withArgs {
+			driverArgs[i] = arg
+			expectedArgs = append(expectedArgs, arg)
+		}
+		exp.WithArgs(driverArgs...)
+	} else if isFirstLikeQuery && !f.builder.tc.tableHasSoftDelete(f.builder.table) && f.where != "" {
 		// For non-soft-delete models with First(), the arguments are simpler
 		// They don't get additional conditions added by GORM
 		// Just pass the original arguments

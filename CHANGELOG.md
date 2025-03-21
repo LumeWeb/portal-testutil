@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.12 (2025-03-21)
+
+### Added
+- Added `WithArgs()` method to provide explicit argument matching for SQL queries:
+  - Works with `ExpectCount()`, `ExpectFind()` and other query builders
+  - Allows exact argument matching for parameterized SQL queries with WHERE clauses
+  - Provides better testing of filter conditions and search parameters
+  - Great for testing complex query conditions with multiple parameters
+
 ## 0.2.11 (2025-03-21)
 
 ### Added

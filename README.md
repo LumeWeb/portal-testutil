@@ -2,6 +2,30 @@
 
 This package provides a comprehensive testing framework for database-backed services in the portal ecosystem. It is designed to simplify testing by providing a fluent interface for building SQL expectations and a registry pattern for mock services.
 
+## What's New in v0.2.12
+
+### Explicit Argument Matching with WithArgs
+
+You can now explicitly specify the arguments to match in SQL queries with the new `WithArgs` method:
+
+```go
+// Match exact arguments in parameterized queries
+testCtx.ForTable("users")
+    .ExpectCount()
+    .Where("status = ?")
+    .WithArgs("active")
+    .ReturnCount(10)
+
+// Especially useful with queryutil.Filter or other WHERE clause generators
+testCtx.ForTable("products")
+    .ExpectFind()
+    .Where("category = ? AND price >= ?")
+    .WithArgs("electronics", 199.99)
+    .ReturnModels(productModels)
+```
+
+This feature makes it easier to test code that generates SQL queries with parameters, such as filter functions, search utilities, or dynamic query builders.
+
 ## What's New in v0.2.11
 
 ### Direct Model Return Support
@@ -384,6 +408,13 @@ testCtx.ForTable("items")
     .ExpectFind()
     .ByID(1)
     .ReturnRows(rows)
+    
+// Find query with explicit arguments (new in v0.2.12)
+testCtx.ForTable("users")
+    .ExpectFind()
+    .Where("email = ? AND status = ?")
+    .WithArgs("john@example.com", "active") // Explicit argument matching
+    .ReturnModels(userModels)
 
 // ExpectCount - Several ways to use it:
 
@@ -410,13 +441,20 @@ testCtx.ForTable("items")
     .ExpectCount()
     .ReturnError(fmt.Errorf("database error"))
 
-// 6. Count with WHERE condition
+// 6. Count with WHERE condition using internal args (legacy approach)
 testCtx.ForTable("items")
     .ExpectCount()
     .Where("status = ?", "active")
     .ReturnCount(3)
 
-// 7. Count with WHERE condition and error
+// 7. Count with WHERE condition and explicit args (new in v0.2.12)
+testCtx.ForTable("items")
+    .ExpectCount()
+    .Where("status = ?")
+    .WithArgs("active") // Explicitly specify the argument to match
+    .ReturnCount(3)
+
+// 8. Count with WHERE condition and error
 testCtx.ForTable("items")
     .ExpectCount()
     .Where("region = ?", "unknown")
