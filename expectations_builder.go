@@ -918,11 +918,9 @@ func (c *CountExpectationBuilder) Where(where string, args ...interface{}) *Coun
 //	    Where("status = ?", "active").
 //	    ReturnCount(3)
 func (c *CountExpectationBuilder) ReturnCount(count int64) *ExpectationsBuilder {
-	// A simple pattern that matches count queries
-	pattern := "^SELECT count\\(\\*\\) FROM `" + c.builder.table + "`"
-
-	// Debug the pattern being created
-	println("Count Pattern: " + pattern)
+	// SQL pattern for go-sqlmock that exactly matches the query pattern GORM generates for count operations
+	// The pattern uses escaped parentheses to match count(*) in the SQL query
+	pattern := "SELECT count\\(\\*\\) FROM `" + c.builder.table + "`"
 
 	// If we have WHERE conditions, add a basic pattern
 	if c.where != "" {
@@ -944,8 +942,7 @@ func (c *CountExpectationBuilder) ReturnCount(count int64) *ExpectationsBuilder 
 		}
 	}
 
-	// The ^ anchor is important to match from the start, but we don't care
-	// about the exact tail of the query (GROUP BY, etc.)
+	// We don't care about the exact tail of the query (GROUP BY, etc.)
 	if pattern[len(pattern)-1] != '*' {
 		pattern += ".*"
 	}

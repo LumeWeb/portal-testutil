@@ -815,6 +815,24 @@ func (tc *DBTestContext) Raw() sqlmock.Sqlmock {
 	return tc.mock
 }
 
+// Mock returns the underlying SQL mock for advanced usage.
+// This is an alias for Raw() that makes the API more intuitive by matching
+// with sqlmock naming conventions.
+//
+// This method provides direct access to the underlying sqlmock.Sqlmock instance,
+// allowing you to set up custom expectations when the higher-level API doesn't
+// meet your requirements.
+//
+// Example:
+//
+//	// Set up a custom count query expectation directly
+//	mock := testCtx.Mock()
+//	mock.ExpectQuery("SELECT count\\(\\*\\) FROM `items`").
+//		WillReturnRows(mock.NewRows([]string{"count(*)"}).AddRow(2))
+func (tc *DBTestContext) Mock() sqlmock.Sqlmock {
+	return tc.mock
+}
+
 // We'll use a simple struct to mock model table name
 type modelWithTableName interface {
 	TableName() string

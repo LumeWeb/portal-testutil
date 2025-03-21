@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.8 (2025-03-21)
+
+### Added
+- Added `Mock()` method as an intuitive alias for `Raw()` to provide direct access to the underlying sqlmock
+
+### Fixed
+- Fixed SQL pattern matching in `ExpectCount()` to correctly work with GORM's generated queries
+
 ## 0.2.7 (2025-03-21)
 
 ### Added
