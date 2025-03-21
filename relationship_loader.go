@@ -2,11 +2,14 @@
 package testutil
 
 import (
+	"database/sql/driver"
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"regexp"
 	"strings"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"gorm.io/gorm"
 )
 
@@ -141,8 +144,49 @@ func (f *FindExpectationBuilder) ReturnModelsWithPreload(models any) *Expectatio
 	// Extract relationship data from the models to attach to our custom hook
 	relationshipData := extractRelationshipData(models)
 
-	// Set up the find expectation with the rows
-	expectationBuilder := f.ReturnRows(rows)
+	// Create a more specific SQL pattern that accounts for WHERE clauses
+	var pattern string
+
+	// Basic pattern matches "SELECT ... FROM table" with any SELECT fields
+	pattern = "^SELECT .* FROM `" + f.builder.table + "`"
+
+	// If we have WHERE conditions, add a pattern that includes the WHERE clause
+	if f.where != "" {
+		// Escape special regex characters in the WHERE clause to create a valid pattern
+		wherePattern := regexp.QuoteMeta(f.where)
+
+		// Replace the ? placeholders with a regex pattern that matches any value
+		// This handles the SQL parameter placeholders
+		wherePattern = strings.ReplaceAll(wherePattern, "\\?", "\\?")
+
+		pattern += " WHERE .*" + wherePattern + ".*"
+	} else if f.builder.tc.tableHasSoftDelete(f.builder.table) {
+		// For soft delete tables with no explicit WHERE, expect the deleted_at IS NULL condition
+		pattern += " WHERE .*`" + f.builder.table + "`.`deleted_at` IS NULL.*"
+	}
+
+	// Set up the query expectation with our customized pattern
+	exp := f.builder.tc.mock.ExpectQuery(pattern)
+
+	// Handle arguments for the WHERE clause
+	if len(f.withArgs) > 0 {
+		// Use explicitly provided arguments
+		driverArgs := make([]driver.Value, len(f.withArgs))
+		for i, arg := range f.withArgs {
+			driverArgs[i] = arg
+		}
+		exp.WithArgs(driverArgs...)
+	} else if len(f.args) > 0 {
+		// For regular arguments, use AnyArg() for flexibility
+		anyArgs := make([]driver.Value, len(f.args))
+		for i := range anyArgs {
+			anyArgs[i] = sqlmock.AnyArg()
+		}
+		exp.WithArgs(anyArgs...)
+	}
+
+	// Return the rows for this expectation
+	exp.WillReturnRows(rows)
 
 	// Generate a unique ID for this callback to prevent registration conflicts
 	// If multiple tests use this feature, we don't want callback name collisions
@@ -166,7 +210,7 @@ func (f *FindExpectationBuilder) ReturnModelsWithPreload(models any) *Expectatio
 		injectRelationships(dest, relationshipData)
 	})
 
-	return expectationBuilder
+	return f.builder
 }
 
 // ReturnModelsWithPreload for search expectations
@@ -177,8 +221,37 @@ func (s *SearchExpectationBuilder) ReturnModelsWithPreload(models any) *Expectat
 	// Extract relationship data from the models
 	relationshipData := extractRelationshipData(models)
 
-	// Set up the expectation with the rows
-	expectationBuilder := s.ReturnRows(rows)
+	// Build a flexible WHERE clause for the search pattern
+	whereClause := s.buildWhereClause()
+
+	// Create a SQL pattern that better handles the WHERE clause
+	query := fmt.Sprintf("SELECT (.+) FROM `%s` WHERE %s", s.builder.table, whereClause)
+
+	// Set up the query expectation with our custom pattern
+	exp := s.builder.tc.mock.ExpectQuery(query)
+
+	// Add arguments for each search field and filter
+	var args []driver.Value
+
+	// Add args for search fields (LIKE conditions)
+	if s.query != "" && len(s.fields) > 0 {
+		for range s.fields {
+			args = append(args, sqlmock.AnyArg())
+		}
+	}
+
+	// Add args for filters
+	for range s.filters {
+		args = append(args, sqlmock.AnyArg())
+	}
+
+	// Set up argument matching if we have any
+	if len(args) > 0 {
+		exp.WithArgs(args...)
+	}
+
+	// Return the rows for this expectation
+	exp.WillReturnRows(rows)
 
 	// Generate a unique ID for this callback
 	uniqueID := fmt.Sprintf("_%p", models)
@@ -197,7 +270,7 @@ func (s *SearchExpectationBuilder) ReturnModelsWithPreload(models any) *Expectat
 		injectRelationships(dest, relationshipData)
 	})
 
-	return expectationBuilder
+	return s.builder
 }
 
 // extractRelationshipData extracts relationship fields from models into a map

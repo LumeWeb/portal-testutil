@@ -124,3 +124,95 @@ func TestRelationshipPreloadingOriginalBehavior(t *testing.T) {
 	// when using ReturnModels without explicit GORM Preload calls
 	assert.Len(t, results[0].Children, 0, "Children slice is empty with original ReturnModels")
 }
+
+// TestWhereClauseWithReturnModelsWithPreload verifies that WHERE clauses work
+// properly with ReturnModelsWithPreload
+func TestWhereClauseWithReturnModelsWithPreload(t *testing.T) {
+	// Create test context
+	tc := NewDBTestContext(t)
+	defer tc.Teardown()
+
+	// Register model with relationships
+	RegisterModelWithRelationships[ReproParentModel](tc)
+
+	// Create parent with child
+	now := time.Now()
+	parent := ReproParentModel{
+		Model: gorm.Model{ID: 1, CreatedAt: now, UpdatedAt: now},
+		Name:  "Test Parent",
+		Children: []ReproChildModel{
+			{
+				Model:    gorm.Model{ID: 1, CreatedAt: now, UpdatedAt: now},
+				Name:     "Test Child",
+				ParentID: 1,
+			},
+		},
+	}
+
+	// Use Where clause with ReturnModelsWithPreload
+	tc.ForTable("repro_parent_models").
+		ExpectFind().
+		Where("name = ?", "Test Parent").
+		ReturnModelsWithPreload([]ReproParentModel{parent})
+
+	// Execute query with WHERE clause
+	var results []ReproParentModel
+	err := tc.DB().Where("name = ?", "Test Parent").Find(&results).Error
+
+	// Verify query executed without error
+	assert.NoError(t, err, "Query should execute without error")
+
+	// Verify result contains the parent
+	assert.Len(t, results, 1, "Should have one result")
+	assert.Equal(t, "Test Parent", results[0].Name, "Name should match")
+
+	// Verify relationship was preloaded
+	assert.Len(t, results[0].Children, 1, "Should have one child")
+	assert.Equal(t, "Test Child", results[0].Children[0].Name, "Child name should match")
+}
+
+// TestSearchWithReturnModelsWithPreload verifies that search queries work
+// properly with ReturnModelsWithPreload
+func TestSearchWithReturnModelsWithPreload(t *testing.T) {
+	// Create test context
+	tc := NewDBTestContext(t)
+	defer tc.Teardown()
+
+	// Register model with relationships
+	RegisterModelWithRelationships[ReproParentModel](tc)
+
+	// Create parent with child
+	now := time.Now()
+	parent := ReproParentModel{
+		Model: gorm.Model{ID: 1, CreatedAt: now, UpdatedAt: now},
+		Name:  "Test Parent",
+		Children: []ReproChildModel{
+			{
+				Model:    gorm.Model{ID: 1, CreatedAt: now, UpdatedAt: now},
+				Name:     "Test Child",
+				ParentID: 1,
+			},
+		},
+	}
+
+	// Use Search with ReturnModelsWithPreload
+	tc.ForTable("repro_parent_models").
+		ExpectSearch("Parent").
+		WithFields("name").
+		ReturnModelsWithPreload([]ReproParentModel{parent})
+
+	// Execute search query
+	var results []ReproParentModel
+	err := tc.DB().Where("name LIKE ?", "%Parent%").Find(&results).Error
+
+	// Verify query executed without error
+	assert.NoError(t, err, "Query should execute without error")
+
+	// Verify result contains the parent
+	assert.Len(t, results, 1, "Should have one result")
+	assert.Equal(t, "Test Parent", results[0].Name, "Name should match")
+
+	// Verify relationship was preloaded
+	assert.Len(t, results[0].Children, 1, "Should have one child")
+	assert.Equal(t, "Test Child", results[0].Children[0].Name, "Child name should match")
+}
