@@ -1464,6 +1464,34 @@ func (f *FindExpectationBuilder) HandleDeletedNotNullRows(rows *sqlmock.Rows) *E
 //	 // Enable diagnostic info to debug pattern matching issues
 //	 tc := testutil.NewDBTestContext(t, testutil.WithSQLDebug())
 //	 tc.ForTable("users").ExpectFind().Where("username = ?", "john").ReturnRows(rows)
+//
+// ReturnModels sets up the expectation to return the provided mode
+// ReturnModels sets up the expectation to return the provided models.
+//
+// This method provides a more convenient interface than ReturnRows by automatically
+// converting your model slices or individual models to the appropriate sqlmock.Rows format
+// using BuildRowsFrom internally.
+//
+// Example:
+//
+//	type User struct {
+//	    ID   int
+//	    Name string
+//	}
+//
+//	// Return a slice of models
+//	userModels := []User{{ID: 1, Name: "Alice"}, {ID: 2, Name: "Bob"}}
+//	tc.ForTable("users").ExpectFind().ReturnModels(userModels)
+//
+//	// Or return a single model
+//	userModel := User{ID: 1, Name: "Alice"}
+//	tc.ForTable("users").ExpectFind().ReturnModels(userModel)
+func (f *FindExpectationBuilder) ReturnModels(models any) *ExpectationsBuilder {
+	// Use BuildRowsFrom to convert the models to rows
+	rows := f.builder.tc.BuildRowsFrom(f.builder.table, models)
+	return f.ReturnRows(rows)
+}
+
 func (f *FindExpectationBuilder) ReturnRows(rows *sqlmock.Rows) *ExpectationsBuilder {
 	var pattern string
 	isFirstLikeQuery := f.isFirst || detectFirstLikeQuery("", f.where, f.args)
@@ -1911,7 +1939,27 @@ func (q *QueryExpectationBuilder) WithArgs(args ...interface{}) *QueryExpectatio
 	return q
 }
 
-// ReturnRows sets the rows to return for the query expectation
+// ReturnRows sets the rows to return for the query expectation.
+//
+// Example:
+//
+//	type Article struct {
+//	    ID    int
+//	    Title string
+//	}
+//
+//	// Return a slice of models for a custom query
+//	articles := []Article{
+//	    {ID: 1, Title: "Introduction"},
+//	    {ID: 2, Title: "Advanced Topics"},
+//	}
+//	tc.Expect().Query("SELECT * FROM articles").ReturnModels("articles", articles)
+func (q *QueryExpectationBuilder) ReturnModels(table string, models any) *GenericExpectationBuilder {
+	// Use BuildRowsFrom to convert the models to rows
+	rows := q.builder.tc.BuildRowsFrom(table, models)
+	return q.ReturnRows(rows)
+}
+
 func (q *QueryExpectationBuilder) ReturnRows(rows *sqlmock.Rows) *GenericExpectationBuilder {
 	exp := q.builder.tc.mock.ExpectQuery(q.query)
 
@@ -2014,7 +2062,28 @@ func (s *SearchExpectationBuilder) ReturnCount(count int64) *SearchExpectationBu
 	return s
 }
 
-// ReturnRows sets the rows to return for the search expectation
+// ReturnRows sets the rows to return for the search expectation.
+//
+// Example:
+//
+//	type Product struct {
+//	    ID    int
+//	    Name  string
+//	    Price float64
+//	}
+//
+//	// Return a slice of models for search results
+//	products := []Product{
+//	    {ID: 1, Name: "Phone", Price: 599.99},
+//	    {ID: 2, Name: "Smartphone", Price: 899.99},
+//	}
+//	tc.ForTable("products").ExpectSearch("phone").ReturnModels(products)
+func (s *SearchExpectationBuilder) ReturnModels(models any) *ExpectationsBuilder {
+	// Use BuildRowsFrom to convert the models to rows
+	rows := s.builder.tc.BuildRowsFrom(s.builder.table, models)
+	return s.ReturnRows(rows)
+}
+
 func (s *SearchExpectationBuilder) ReturnRows(rows *sqlmock.Rows) *ExpectationsBuilder {
 	// Build the WHERE clause for the search
 	whereClause := s.buildWhereClause()

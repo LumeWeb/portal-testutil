@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.11 (2025-03-21)
+
+### Added
+- Added `ReturnModels()` method to `ExpectFind()` to simplify returning model slices:
+  - Now you can directly pass model slices to `ExpectFind().ReturnModels(myModels)` 
+  - No need to manually convert models to rows using `BuildRowsFrom()`
+  - Added similar methods to `ExpectSearch()` and custom `Query()` builders
+  - Makes API more consistent and user-friendly
+
 ## 0.2.10 (2025-03-21)
 
 ### Added

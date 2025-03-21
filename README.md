@@ -2,6 +2,29 @@
 
 This package provides a comprehensive testing framework for database-backed services in the portal ecosystem. It is designed to simplify testing by providing a fluent interface for building SQL expectations and a registry pattern for mock services.
 
+## What's New in v0.2.11
+
+### Direct Model Return Support
+
+You can now directly pass model structs to expectation builders without manually converting them to rows:
+
+```go
+// Old approach (still supported):
+rows := testCtx.BuildRowsFrom("users", userModels)
+testCtx.ForTable("users").ExpectFind().ReturnRows(rows)
+
+// New approach with ReturnModels:
+testCtx.ForTable("users").ExpectFind().ReturnModels(userModels)
+
+// Also works with search expectations:
+testCtx.ForTable("products").ExpectSearch("phone").ReturnModels(productModels)
+
+// And custom queries:
+testCtx.Expect().Query("SELECT \\* FROM users").ReturnModels("users", userModels)
+```
+
+This feature makes database testing even more concise and intuitive, eliminating the manual step of converting model structs to rows.
+
 ## Architecture
 
 The library properly extends the core Portal testing facilities, providing specialized utilities for database testing, SQL expectations, and service mocking. It follows these design principles:
@@ -147,6 +170,9 @@ rows := testCtx.BuildRowsFrom("cases", []models.Case{
 
 // Use in SQL expectations
 testCtx.ForTable("cases").ExpectFind().ReturnRows(rows)
+
+// Or more directly with ReturnModels (new in v0.2.11):
+testCtx.ForTable("cases").ExpectFind().ReturnModels(caseModels)
 ```
 
 ### Transaction Support for Complex Models
@@ -736,11 +762,18 @@ func TestUserService_SearchUsers(t *testing.T) {
         .Where("(username LIKE ? OR email LIKE ?) AND status = ?")
         .ReturnCount(2)
     
-    // Set up expectation for find query
+    // Set up expectation for find query - two equivalent approaches
+    // Traditional approach with pre-built rows:
     testCtx.ForTable("users")
         .ExpectFind()
         .Where("(username LIKE ? OR email LIKE ?) AND status = ?")
         .ReturnRows(userRows)
+        
+    // Or with v0.2.11 direct models approach:
+    testCtx.ForTable("users")
+        .ExpectFind()
+        .Where("(username LIKE ? OR email LIKE ?) AND status = ?")
+        .ReturnModels(users)
     
     // Create service
     service := NewUserService(testCtx.DB())
