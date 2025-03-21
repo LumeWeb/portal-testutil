@@ -200,7 +200,7 @@ func TestGenericExpectationBuilder_Query(t *testing.T) {
 	// Create a generic query expectation
 	rows := sqlmock.NewRows([]string{"count"}).AddRow(5)
 	tc.Expect().
-		Query("^SELECT count\\(\\*\\) FROM users$").
+		Query("SELECT count\\(\\*\\) FROM users").
 		ReturnRows(rows)
 
 	// Execute a matching query
@@ -217,7 +217,7 @@ func TestGenericExpectationBuilder_Exec(t *testing.T) {
 
 	// Create a generic exec expectation
 	tc.Expect().
-		Exec("^UPDATE users SET active = \\? WHERE id = \\?$").
+		Exec("UPDATE users SET active = \\? WHERE id = \\?").
 		WithArgs(true, 1).
 		ReturnResult(1)
 

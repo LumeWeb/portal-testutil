@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.9 (2025-03-21)
+
+### Fixed
+- Improved SQL pattern matching documentation for count queries:
+  - Added comprehensive godocs about model registration for soft delete handling
+  - Updated documentation to explain the removal of `^` anchor for better GORM compatibility
+- Implemented previously skipped `TestBuildRowsFrom_UnsupportedType` test
+
 ## 0.2.8 (2025-03-21)
 
 ### Added

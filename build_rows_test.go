@@ -333,6 +333,19 @@ func TestBuildRowsFrom_EmptySlice(t *testing.T) {
 }
 
 func TestBuildRowsFrom_UnsupportedType(t *testing.T) {
-	// Skip this test since we can't easily create a mock TestContext
-	t.Skip("Skipping unsupported type test")
+	// Create a test context
+	testCtx := NewDBTestContext(t)
+
+	// Test with an unsupported type (a primitive int)
+	unsupportedValue := 42
+
+	// We expect a warning log but no panic, and empty rows returned
+	rows := testCtx.BuildRowsFrom("test_table", unsupportedValue)
+
+	// Verify that we got empty rows back
+	assert.NotNil(t, rows, "BuildRowsFrom should return non-nil rows even for unsupported types")
+
+	// Verify no data returned
+	wrappedRows := NewRowsWrapper(rows)
+	assert.False(t, wrappedRows.Next(), "BuildRowsFrom should return empty rows for unsupported types")
 }

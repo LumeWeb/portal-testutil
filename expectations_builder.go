@@ -801,6 +801,25 @@ func WithColumnName(name string) CountOption {
 // By default, it uses "count(*)" as the column name to be compatible with most ORM frameworks.
 // For backward compatibility with older code, you can use WithColumnName("count") to use the
 // previous behavior.
+//
+// Important notes about SQL patterns and soft delete:
+//
+//  1. The SQL pattern doesn't use the ^ anchor to better match GORM's generated queries.
+//     This allows it to flexibly match various forms of count queries that GORM might generate.
+//
+//  2. For tables with soft delete (deleted_at field), GORM automatically adds
+//     WHERE conditions for deleted_at IS NULL. To handle this correctly in tests:
+//     - Register a model for the table: tc.RegisterModel(&YourModel{})
+//     - Or manually specify the pattern with the proper WHERE clauses
+//
+// Example with model registration:
+//
+//	// Register model to handle soft delete correctly
+//	type User struct {
+//	    ID int
+//	}
+//	tc.RegisterModel(&User{})
+//	tc.ForTable("users").ExpectCount().ReturnCount(10)
 func (b *ExpectationsBuilder) ExpectCount(countOrOptions ...interface{}) *CountExpectationBuilder {
 	// Default column name for compatibility with modern ORM frameworks
 	columnName := "count(*)"
@@ -841,8 +860,9 @@ func (b *ExpectationsBuilder) ExpectCount(countOrOptions ...interface{}) *CountE
 
 	if count != nil {
 		// For backward compatibility, if a count is provided, set up the expectation directly
+		// Note: We avoid using the ^ anchor to allow for minor variations
 		// but still return the builder for method chaining
-		b.tc.mock.ExpectQuery("^SELECT count\\(\\*\\) FROM `" + b.table + "`").
+		b.tc.mock.ExpectQuery("SELECT count\\(\\*\\) FROM `" + b.table + "`").
 			WillReturnRows(sqlmock.NewRows([]string{columnName}).AddRow(*count))
 	}
 
@@ -901,6 +921,19 @@ func (c *CountExpectationBuilder) Where(where string, args ...interface{}) *Coun
 // The count value will be returned in the column specified by WithColumnName, or in the
 // default "count(*)" column if not specified.
 //
+// Important: For tables with soft delete (deleted_at field), you should register a model
+// before using this method to properly handle GORM's automatic WHERE deleted_at IS NULL:
+//
+//	// Register a model to handle soft delete correctly
+//	type Item struct {
+//	    ID int
+//	}
+//	tc.RegisterModel(&Item{})
+//	tc.ForTable("items").ExpectCount().ReturnCount(10)
+//
+// The SQL pattern used doesn't include the ^ anchor, making it more compatible
+// with various SQL queries GORM might generate.
+//
 // Example:
 //
 //	// Basic count query
@@ -918,7 +951,8 @@ func (c *CountExpectationBuilder) Where(where string, args ...interface{}) *Coun
 //	    Where("status = ?", "active").
 //	    ReturnCount(3)
 func (c *CountExpectationBuilder) ReturnCount(count int64) *ExpectationsBuilder {
-	// SQL pattern for go-sqlmock that exactly matches the query pattern GORM generates for count operations
+	// SQL pattern for go-sqlmock that matches query patterns GORM generates for count operations
+	// We avoid using the ^ anchor to allow for better matching with actual GORM queries
 	// The pattern uses escaped parentheses to match count(*) in the SQL query
 	pattern := "SELECT count\\(\\*\\) FROM `" + c.builder.table + "`"
 
@@ -972,6 +1006,19 @@ func (c *CountExpectationBuilder) ReturnCount(count int64) *ExpectationsBuilder 
 // It's useful for testing error handling in your code, including error conditions
 // like "record not found" or connection errors.
 //
+// Important: For tables with soft delete (deleted_at field), you should register a model
+// before using this method to properly handle GORM's automatic WHERE deleted_at IS NULL:
+//
+//	// Register a model to handle soft delete correctly
+//	type Item struct {
+//	    ID int
+//	}
+//	tc.RegisterModel(&Item{})
+//	tc.ForTable("items").ExpectCount().ReturnError(errors.New("db error"))
+//
+// The SQL pattern used doesn't include the ^ anchor, making it more compatible
+// with various SQL queries GORM might generate.
+//
 // Example:
 //
 //	// Basic error simulation
@@ -991,8 +1038,9 @@ func (c *CountExpectationBuilder) ReturnCount(count int64) *ExpectationsBuilder 
 //	    ExpectCount(WithColumnName("count")).
 //	    ReturnError(errors.New("db error"))
 func (c *CountExpectationBuilder) ReturnError(err error) *ExpectationsBuilder {
-	// A simple pattern that matches count queries
-	pattern := "^SELECT count\\(\\*\\) FROM `" + c.builder.table + "`"
+	// SQL pattern that exactly matches GORMs generated count queries
+	// Note: We avoid using the ^ anchor to allow for minor variations
+	pattern := "SELECT count\\(\\*\\) FROM `" + c.builder.table + "`"
 
 	// Note: When working with models that have soft delete (deleted_at field),
 	// GORM automatically adds "WHERE table_name.deleted_at IS NULL" conditions.
@@ -1018,7 +1066,7 @@ func (c *CountExpectationBuilder) ReturnError(err error) *ExpectationsBuilder {
 		}
 	}
 
-	// The ^ anchor is important to match from the start, but we don't care
+	// We avoid using the ^ anchor to allow for minor variations, but we don't care
 	// about the exact tail of the query (GROUP BY, etc.)
 	if pattern[len(pattern)-1] != '*' {
 		pattern += ".*"

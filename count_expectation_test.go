@@ -67,6 +67,12 @@ func TestCountExpectationBuilder(t *testing.T) {
 		tc := NewDBTestContext(t)
 		defer tc.Teardown()
 
+		// Register a model to avoid soft delete complexity
+		type Item struct {
+			ID int
+		}
+		tc.RegisterModel(&Item{})
+
 		// Use builder style count API
 		tc.ForTable("items").ExpectCount().ReturnCount(10)
 
@@ -82,6 +88,12 @@ func TestCountExpectationBuilder(t *testing.T) {
 	t.Run("ExpectCount with custom column name", func(t *testing.T) {
 		tc := NewDBTestContext(t)
 		defer tc.Teardown()
+
+		// Register a model to avoid soft delete complexity
+		type Item struct {
+			ID int
+		}
+		tc.RegisterModel(&Item{})
 
 		// Use builder style API with custom column name
 		tc.ForTable("items").ExpectCount(WithColumnName("count")).ReturnCount(15)
@@ -114,6 +126,12 @@ func TestCountExpectationBuilder(t *testing.T) {
 	t.Run("ExpectCount with ReturnError", func(t *testing.T) {
 		tc := NewDBTestContext(t)
 		defer tc.Teardown()
+
+		// Register a model to avoid soft delete complexity
+		type Item struct {
+			ID int
+		}
+		tc.RegisterModel(&Item{})
 
 		// Set up an error expectation with builder API
 		expectedErr := errors.New("database count error")
@@ -185,6 +203,12 @@ func TestCountExpectationBuilder(t *testing.T) {
 		tc := NewDBTestContext(t)
 		defer tc.Teardown()
 
+		// Register a model to avoid soft delete complexity
+		type Item struct {
+			ID int
+		}
+		tc.RegisterModel(&Item{})
+
 		// Set up a not found error expectation using builder API
 		tc.ForTable("items").ExpectCount().ReturnError(gorm.ErrRecordNotFound)
 
@@ -200,6 +224,20 @@ func TestCountExpectationBuilder(t *testing.T) {
 	t.Run("Multiple count queries", func(t *testing.T) {
 		tc := NewDBTestContext(t)
 		defer tc.Teardown()
+
+		// Register models to avoid soft delete complexity
+		type User struct {
+			ID int
+		}
+		type Item struct {
+			ID int
+		}
+		type Product struct {
+			ID int
+		}
+		tc.RegisterModel(&User{})
+		tc.RegisterModel(&Item{})
+		tc.RegisterModel(&Product{})
 
 		// Set up all expectations using builder API
 		tc.ForTable("users").ExpectCount().ReturnCount(15)
@@ -222,5 +260,103 @@ func TestCountExpectationBuilder(t *testing.T) {
 		assert.Equal(t, int64(5), productCount)
 
 		tc.VerifyExpectations()
+	})
+}
+
+// TestCountSQLPatternRegression tests the fix for the SQL pattern matching issue where
+// the ^ anchor in ExpectCount patterns prevented matching with GORM's actual SQL.
+func TestCountSQLPatternRegression(t *testing.T) {
+	// Test the direct ExpectCount(n) approach
+	t.Run("Direct ExpectCount works with GORM queries", func(t *testing.T) {
+		tc := NewDBTestContext(t)
+		defer tc.Teardown()
+
+		// Use the direct count approach
+		tc.ForTable("items").ExpectCount(5)
+
+		// Execute a count query
+		var count int64
+		result := tc.DB().Table("items").Count(&count)
+
+		// Verify it works correctly
+		assert.NoError(t, result.Error, "Count query should succeed with direct approach")
+		assert.Equal(t, int64(5), count, "Count should match expected value")
+	})
+
+	// Test the builder API approach
+	t.Run("Builder API works with GORM queries", func(t *testing.T) {
+		tc := NewDBTestContext(t)
+		defer tc.Teardown()
+
+		// Register a model to avoid soft delete complexity
+		type Item struct {
+			ID int
+		}
+		tc.RegisterModel(&Item{})
+
+		// Use the builder API
+		tc.ForTable("items").ExpectCount().ReturnCount(10)
+
+		// Execute a count query
+		var count int64
+		result := tc.DB().Table("items").Count(&count)
+
+		// Verify it works correctly
+		assert.NoError(t, result.Error, "Count query should succeed with builder API")
+		assert.Equal(t, int64(10), count, "Count should match expected value")
+	})
+
+	// Test with WHERE clause
+	t.Run("With WHERE clause", func(t *testing.T) {
+		tc := NewDBTestContext(t)
+		defer tc.Teardown()
+
+		// Set up expectation with WHERE condition
+		tc.ForTable("items").ExpectCount().Where("status = ?", "active").ReturnCount(3)
+
+		// Execute count query with WHERE condition
+		var count int64
+		result := tc.DB().Table("items").Where("status = ?", "active").Count(&count)
+
+		// Verify it works correctly
+		assert.NoError(t, result.Error, "Count with WHERE query should succeed")
+		assert.Equal(t, int64(3), count, "Count should match expected value")
+	})
+
+	// Test ReturnError
+	t.Run("With ReturnError", func(t *testing.T) {
+		tc := NewDBTestContext(t)
+		defer tc.Teardown()
+
+		// Set up expectation with error
+		tc.ForTable("items").ExpectCount().ReturnError(assert.AnError)
+
+		// Execute count query
+		var count int64
+		result := tc.DB().Table("items").Count(&count)
+
+		// Verify an error is returned (don't check exact error)
+		assert.Error(t, result.Error, "Count query should return an error")
+	})
+
+	// Test the Mock() method directly
+	t.Run("Using Mock method directly", func(t *testing.T) {
+		tc := NewDBTestContext(t)
+		defer tc.Teardown()
+
+		// Get direct access to the sqlmock via Mock() method
+		mock := tc.Mock()
+
+		// Set up the mock with exact pattern that works with GORM
+		mock.ExpectQuery("SELECT count\\(\\*\\) FROM `items`").
+			WillReturnRows(mock.NewRows([]string{"count(*)"}).AddRow(2))
+
+		// Execute count query
+		var count int64
+		err := tc.DB().Table("items").Count(&count).Error
+
+		// Verify it worked correctly
+		assert.NoError(t, err, "Count query should succeed with direct mock setup")
+		assert.Equal(t, int64(2), count, "Count should match expected value")
 	})
 }
