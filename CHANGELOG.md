@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.2.16 (2025-03-21)
+
+### Added
+- Added relationship preloading support for test data with ReturnModelsWithPreload():
+  - Powerful new method that automatically populates GORM relationship fields
+  - Eliminates the need for explicit Preload() calls in test queries
+  - Removes the requirement for multiple mock expectations (one per relationship)
+  - Works with all GORM relationship types (has-many, has-one, belongs-to)
+  - Supports nested relationships and complex model structures
+  - Includes comprehensive documentation and examples
+  - Compatible with ExpectFind(), ExpectSearch(), and other query builders
+  
+  **Example Usage:**
+  ```go
+  // Create test data with relationships
+  parentWithChildren := models.Parent{
+      ID: 1,
+      Name: "Parent",
+      Children: []models.Child{
+          {ID: 1, Name: "Child 1", ParentID: 1},
+          {ID: 2, Name: "Child 2", ParentID: 1},
+      },
+  }
+  
+  // Set up expectation with relationship support
+  tc.ForTable("parents").
+      ExpectFind().
+      ReturnModelsWithPreload([]models.Parent{parentWithChildren})
+  
+  // Execute query - NO Preload() needed!
+  var results []models.Parent
+  err := service.DB().Find(&results).Error
+  
+  // Relationships are automatically populated
+  assert.Equal(t, "Child 1", results[0].Children[0].Name)
+  ```
+
+### Fixed
+- Fixed relationship handling limitation where relationship fields were empty in test results:
+  - Before: Your test data had populated relationship fields, but they came back empty in results
+  - Now: Relationship fields are automatically populated in query results
+  - Eliminates the need for separate mock expectations for relationship queries
+  - Makes tests with relationship models much simpler and more intuitive
+
 ## 0.2.15 (2025-03-21)
 
 ### Fixed

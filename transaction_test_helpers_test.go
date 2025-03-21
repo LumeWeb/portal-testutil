@@ -11,13 +11,13 @@ import (
 )
 
 // Test models for the complex validation case
-type TestParent struct {
+type TxTestParent struct {
 	gorm.Model
 	Name string
 }
 
-func (TestParent) TableName() string {
-	return "test_parents"
+func (TxTestParent) TableName() string {
+	return "tx_test_parents"
 }
 
 // Type definitions for enums
@@ -31,32 +31,32 @@ const (
 	DirOut  TestDirection = "out"
 )
 
-// TestChild model with relationship AND hooks that call other methods
-type TestChild struct {
+// TxTestChild model with relationship AND hooks that call other methods
+type TxTestChild struct {
 	gorm.Model
 	ParentID  uint
-	Parent    TestParent `gorm:"foreignKey:ParentID"`
+	Parent    TxTestParent `gorm:"foreignKey:ParentID"`
 	Type      TestType
 	Direction TestDirection
 	Content   string
 	ThreadID  string
 }
 
-func (TestChild) TableName() string {
-	return "test_children"
+func (TxTestChild) TableName() string {
+	return "tx_test_children"
 }
 
 // This hook calls another method - key to reproducing the issue
-func (c *TestChild) BeforeCreate(tx *gorm.DB) error {
+func (c *TxTestChild) BeforeCreate(tx *gorm.DB) error {
 	return c.Validate()
 }
 
-func (c *TestChild) BeforeUpdate(tx *gorm.DB) error {
+func (c *TxTestChild) BeforeUpdate(tx *gorm.DB) error {
 	return c.Validate()
 }
 
 // Complex validation method with map checks
-func (c *TestChild) Validate() error {
+func (c *TxTestChild) Validate() error {
 	// Content validation
 	if c.Content == "" {
 		return fmt.Errorf("content is required")
@@ -91,15 +91,15 @@ func TestModelsWithRelationshipsAndValidation(t *testing.T) {
 	defer tc.Teardown()
 
 	// Register models with relationships
-	tc.RegisterModel(&TestChild{})
-	tc.RegisterModel(&TestParent{})
+	tc.RegisterModel(&TxTestChild{})
+	tc.RegisterModel(&TxTestParent{})
 
 	// Mock expectation for create operation
-	tc.ForTable("test_children").ExpectCreate(1)
+	tc.ForTable("tx_test_children").ExpectCreate(1)
 
 	// Execute test with complex model - should use our fix
 	err := tc.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
-		child := &TestChild{
+		child := &TxTestChild{
 			ParentID:  1,
 			Type:      TypeOne,
 			Direction: DirIn,
