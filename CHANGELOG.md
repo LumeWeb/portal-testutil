@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.18 (2025-03-21)
+
+### Added
+- Added SerializeMapFields utility function to handle map fields in GORM models:
+  - Provides a dedicated helper to convert map fields to JSON strings to avoid the "unsupported data type: &map[]" error
+  - Works with both single models and slices of models
+  - Handles different map field types including direct maps and slices of maps
+  - Processes nested structures while preserving original model data
+  - Returns a copy of the model with map fields converted to a format compatible with SQL libraries
+  - Includes comprehensive tests and examples showing usage patterns
+
+### Fixed
+- Added documentation and examples for working with map fields in GORM models to avoid the "unsupported data type: &map[]" error:
+  - Demonstrated serializing maps to JSON strings in model fields
+  - Created comprehensive example in test files
+  - Clarified that go-sqlmock has limitations with map fields in test environments
+  - Provided patterns to properly store and retrieve map data in tests
+
 ## 0.2.17 (2025-03-21)
 
 ### Fixed

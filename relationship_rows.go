@@ -106,8 +106,8 @@ func (tc *DBTestContext) BuildRowsWithRelations(table string, models any) *sqlmo
 	}
 }
 
-// buildRowsFromStructsWithRelations creates mock rows with relationship fields serialized to JSON.
-// This internal function builds upon the standard implementation but handles relationship fields differently.
+// buildRowsFromStructsWithRelations creates mock rows with relationship fields and maps serialized to JSON.
+// This internal function builds upon the standard implementation but handles relationship fields and maps differently.
 func (tc *DBTestContext) buildRowsFromStructsWithRelations(table string, models any) *sqlmock.Rows {
 	modelsVal := reflect.ValueOf(models)
 
@@ -191,7 +191,7 @@ func (tc *DBTestContext) buildRowsFromStructsWithRelations(table string, models 
 					values[col] = jsonData
 				}
 			} else {
-				// For non-relationship fields, use standard handling
+				// For other non-relationship fields, use standard handling
 				values[col] = getFieldValue(field)
 			}
 		}
@@ -235,18 +235,21 @@ func (tc *DBTestContext) extractFieldNamesWithRelations(t reflect.Type, path []i
 			continue
 		}
 
+		// Check for map fields which need special handling
+		isMapType := field.Type.Kind() == reflect.Map
+
 		// Determine if this is a relationship field
 		isRelationship, relationshipType := isRelationshipField(field)
 
 		// Skip has-many slice/array relationships as direct columns
 		if field.Type.Kind() == reflect.Slice || field.Type.Kind() == reflect.Array {
 			// But include them as JSON columns with the _json suffix
-			if isRelationship {
+			if isRelationship || isMapType || containsMapType(field.Type) {
 				colName := toSnakeCase(field.Name) + "_json"
 				ensureColumnInList(columns, colName)
 				fieldInfos[colName] = &fieldInfo{
 					path:           newPath,
-					isRelationship: true,
+					isRelationship: true, // Treat as relationship for serialization
 				}
 			}
 			continue
@@ -258,9 +261,18 @@ func (tc *DBTestContext) extractFieldNamesWithRelations(t reflect.Type, path []i
 		// Add normal column to the list
 		if colName != "" {
 			ensureColumnInList(columns, colName)
-			fieldInfos[colName] = &fieldInfo{
-				path:           newPath,
-				isRelationship: false,
+
+			// For map types, mark them as "relationships" so they'll be serialized to JSON
+			if isMapType {
+				fieldInfos[colName] = &fieldInfo{
+					path:           newPath,
+					isRelationship: true, // Treat maps like relationships for serialization
+				}
+			} else {
+				fieldInfos[colName] = &fieldInfo{
+					path:           newPath,
+					isRelationship: false,
+				}
 			}
 		}
 
@@ -419,12 +431,62 @@ func getFieldValue(field reflect.Value) interface{} {
 
 		// Last resort: convert to string
 		return field.String()
+	case reflect.Map:
+		// For map fields, serialize to JSON string
+		if field.CanInterface() {
+			jsonData, err := json.Marshal(field.Interface())
+			if err == nil {
+				return string(jsonData)
+			}
+		}
+		// Fallback to empty JSON object if serialization fails
+		return "{}"
+	case reflect.Slice, reflect.Array:
+		// Check if it's a slice of maps or complex types
+		if field.Type().Elem().Kind() == reflect.Map || containsMapType(field.Type()) {
+			// Serialize to JSON string
+			if field.CanInterface() {
+				jsonData, err := json.Marshal(field.Interface())
+				if err == nil {
+					return string(jsonData)
+				}
+			}
+			// Fallback to empty JSON array if serialization fails
+			return "[]"
+		}
+
+		// Regular slice/array handling
+		return field.Interface()
 	default:
 		// Try to convert to string or return nil
 		if field.CanInterface() {
 			return field.Interface()
 		}
 		return nil
+	}
+}
+
+// Helper functions for map type handling
+
+// containsMapType checks if a type is or contains maps (like slice of maps)
+func containsMapType(t reflect.Type) bool {
+	switch t.Kind() {
+	case reflect.Map:
+		return true
+	case reflect.Slice, reflect.Array:
+		return t.Elem().Kind() == reflect.Map || (t.Elem().Kind() == reflect.Ptr && t.Elem().Elem().Kind() == reflect.Map)
+	case reflect.Ptr:
+		return containsMapType(t.Elem())
+	case reflect.Struct:
+		// Check if any field is a map
+		for i := 0; i < t.NumField(); i++ {
+			if containsMapType(t.Field(i).Type) {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
 	}
 }
 

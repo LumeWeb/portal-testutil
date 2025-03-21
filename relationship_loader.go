@@ -316,6 +316,8 @@ func extractRelationshipData(models any) map[string]interface{} {
 // - Struct fields that aren't basic types (like time.Time)
 // - Slice fields containing structs (has-many relationships)
 // - Pointer fields pointing to structs (nullable relationships)
+// - Map fields (which need special handling)
+// - Slices of maps or complex data
 //
 // When a relationship field is found, it serializes the field value to JSON and
 // stores it in the provided map with a key that uniquely identifies the relationship:
@@ -352,6 +354,14 @@ func extractModelRelationships(model reflect.Value, data map[string]interface{})
 
 		// Check if this is a relationship field (struct or slice of structs)
 		isRelationship := false
+		isMapType := false
+
+		// Check for map types - direct maps or complex structures with maps
+		if field.Kind() == reflect.Map {
+			isMapType = true
+		} else if containsMapType(field.Type()) {
+			isMapType = true
+		}
 
 		// Check for slice types (has-many relationships)
 		if field.Kind() == reflect.Slice && field.Type().Elem().Kind() == reflect.Struct {
@@ -373,8 +383,9 @@ func extractModelRelationships(model reflect.Value, data map[string]interface{})
 			}
 		}
 
-		if isRelationship {
-			// Serialize the relationship field to JSON
+		// Serialize and store both relationship fields and map fields
+		if isRelationship || isMapType {
+			// Serialize the field to JSON
 			jsonData, err := json.Marshal(field.Interface())
 			if err == nil {
 				// Store in our map as modelType_ID_fieldName -> jsonData
@@ -431,6 +442,8 @@ func injectRelationships(dest interface{}, relationshipData map[string]interface
 // - Slices of models (has-many relationships)
 // - Structs (has-one/belongs-to relationships)
 // - Pointers to structs (nullable relationships)
+// - Maps (serialized as JSON strings)
+// - Slices of maps (serialized as JSON strings)
 //
 // The key matching pattern is: "ModelType_ID_FieldName" -> JSONData
 func injectModelRelationships(model reflect.Value, relationshipData map[string]interface{}) {
@@ -499,6 +512,31 @@ func injectModelRelationships(model reflect.Value, relationshipData map[string]i
 				if err == nil {
 					// Set the pointer field to the new value
 					field.Set(newVal)
+				}
+			} else if field.Kind() == reflect.Map {
+				// Handle map fields by deserializing from JSON
+				newVal = reflect.MakeMap(field.Type())
+
+				// For map[string]interface{} which is the most common case
+				if field.Type().Key().Kind() == reflect.String && field.Type().Elem().Kind() == reflect.Interface {
+					var mapData map[string]interface{}
+					err := json.Unmarshal(jsonBytes, &mapData)
+					if err == nil {
+						// Convert the map data to reflect values
+						for k, v := range mapData {
+							keyVal := reflect.ValueOf(k)
+							valVal := reflect.ValueOf(v)
+							newVal.SetMapIndex(keyVal, valVal)
+						}
+						field.Set(newVal)
+					}
+				} else {
+					// For other map types, use reflection
+					mapVal := reflect.New(reflect.MapOf(field.Type().Key(), field.Type().Elem()))
+					err := json.Unmarshal(jsonBytes, mapVal.Interface())
+					if err == nil && !mapVal.Elem().IsNil() {
+						field.Set(mapVal.Elem())
+					}
 				}
 			}
 		}

@@ -2,6 +2,8 @@ package testutil
 
 import (
 	"database/sql/driver"
+	"encoding/json"
+	"reflect"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -120,10 +122,50 @@ func (rb *RowBuilder) AddRow(values ...interface{}) *RowBuilder {
 		case int64, float64, float32, bool, string, []byte, time.Time:
 			// These types are already driver.Value compatible
 			driverValues[i] = v
+		case map[string]interface{}:
+			// Convert maps to JSON strings
+			jsonData, err := json.Marshal(v)
+			if err == nil {
+				driverValues[i] = string(jsonData)
+			} else {
+				driverValues[i] = "{}"
+			}
+		case []map[string]interface{}:
+			// Convert slices of maps to JSON strings
+			jsonData, err := json.Marshal(v)
+			if err == nil {
+				driverValues[i] = string(jsonData)
+			} else {
+				driverValues[i] = "[]"
+			}
+		case map[string]map[string]interface{}:
+			// Convert nested maps to JSON strings
+			jsonData, err := json.Marshal(v)
+			if err == nil {
+				driverValues[i] = string(jsonData)
+			} else {
+				driverValues[i] = "{}"
+			}
 		default:
-			// For other types, let sqlmock handle the conversion
-			// If this fails, the test will fail with an appropriate error
-			driverValues[i] = v
+			// For map-like or slice-of-map-like structures, serialize to JSON
+			rv := reflect.ValueOf(v)
+			if rv.Kind() == reflect.Map ||
+				(rv.Kind() == reflect.Slice && rv.Type().Elem().Kind() == reflect.Map) {
+				jsonData, err := json.Marshal(v)
+				if err == nil {
+					driverValues[i] = string(jsonData)
+				} else {
+					if rv.Kind() == reflect.Slice {
+						driverValues[i] = "[]"
+					} else {
+						driverValues[i] = "{}"
+					}
+				}
+			} else {
+				// For other types, let sqlmock handle the conversion
+				// If this fails, the test will fail with an appropriate error
+				driverValues[i] = v
+			}
 		}
 	}
 
