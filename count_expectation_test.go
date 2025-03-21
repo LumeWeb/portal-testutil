@@ -344,8 +344,9 @@ func TestCountSQLPatternRegression(t *testing.T) {
 		tc := NewDBTestContext(t)
 		defer tc.Teardown()
 
-		// Get direct access to the sqlmock via Mock() method
-		mock := tc.Mock()
+		// Get direct access to the sqlmock via MockWithDefaults() method
+		// which automatically handles GORM's connection validation queries
+		mock := tc.MockWithDefaults()
 
 		// Set up the mock with exact pattern that works with GORM
 		mock.ExpectQuery("SELECT count\\(\\*\\) FROM `items`").

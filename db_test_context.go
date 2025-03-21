@@ -807,6 +807,11 @@ func (tc *DBTestContext) Validation() *ValidationTester {
 // support your needs, as it bypasses the safety and convenience features of
 // the test context.
 //
+// IMPORTANT: When using Raw() directly, you may need to handle GORM's connection
+// validation queries like "SELECT 1" explicitly, especially when running multiple
+// database operations. Consider using MockWithDefaults() instead which automatically
+// adds this expectation.
+//
 // Example:
 //
 //	// Set up a custom expectation directly
@@ -823,6 +828,11 @@ func (tc *DBTestContext) Raw() sqlmock.Sqlmock {
 // allowing you to set up custom expectations when the higher-level API doesn't
 // meet your requirements.
 //
+// IMPORTANT: When using Mock() directly, you may need to handle GORM's connection
+// validation queries like "SELECT 1" explicitly, especially when running multiple
+// database operations. Consider using MockWithDefaults() instead which automatically
+// adds this expectation.
+//
 // Example:
 //
 //	// Set up a custom count query expectation directly
@@ -830,6 +840,29 @@ func (tc *DBTestContext) Raw() sqlmock.Sqlmock {
 //	mock.ExpectQuery("SELECT count\\(\\*\\) FROM `items`").
 //		WillReturnRows(mock.NewRows([]string{"count(*)"}).AddRow(2))
 func (tc *DBTestContext) Mock() sqlmock.Sqlmock {
+	return tc.mock
+}
+
+// MockWithDefaults returns the underlying SQL mock with common default expectations added.
+//
+// This method provides direct access to the sqlmock.Sqlmock instance like Mock(), but
+// additionally sets up expectations for common queries that GORM automatically runs,
+// such as "SELECT 1" for connection validation.
+//
+// Use this method when you need direct access to the mock but want to avoid having to
+// manually handle these common queries.
+//
+// Example:
+//
+//	// Set up a custom count query expectation directly with defaults
+//	mock := testCtx.MockWithDefaults()
+//	mock.ExpectQuery("SELECT count\\(\\*\\) FROM `items`").
+//		WillReturnRows(mock.NewRows([]string{"count(*)"}).AddRow(2))
+func (tc *DBTestContext) MockWithDefaults() sqlmock.Sqlmock {
+	// Set up expectations for common queries
+	oneRow := sqlmock.NewRows([]string{"1"}).AddRow(1)
+	tc.mock.ExpectQuery(`SELECT 1`).WillReturnRows(oneRow)
+
 	return tc.mock
 }
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.10 (2025-03-21)
+
+### Added
+- Added `MockWithDefaults()` method to automatically handle GORM's connection validation queries
+- Enhanced documentation to warn about `SELECT 1` validation queries when using direct mock access
+
 ## 0.2.9 (2025-03-21)
 
 ### Fixed
