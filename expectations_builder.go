@@ -1579,8 +1579,9 @@ func (f *FindExpectationBuilder) HandleDeletedNotNullRows(rows *sqlmock.Rows) *E
 //	userModel := User{ID: 1, Name: "Alice"}
 //	tc.ForTable("users").ExpectFind().ReturnModels(userModel)
 func (f *FindExpectationBuilder) ReturnModels(models any) *ExpectationsBuilder {
-	// Use BuildRowsFrom to convert the models to rows
-	rows := f.builder.tc.BuildRowsFrom(f.builder.table, models)
+	// Use BuildRowsWithRelations to properly handle GORM relationship fields
+	// This prevents the "unsupported data type: &map[]" error with relationship models
+	rows := f.builder.tc.BuildRowsWithRelations(f.builder.table, models)
 	return f.ReturnRows(rows)
 }
 
@@ -1637,7 +1638,7 @@ func (f *FindExpectationBuilder) ReturnRows(rows *sqlmock.Rows) *ExpectationsBui
 		if !hasDeletedAt && f.builder.tc.tableHasSoftDelete(f.builder.table) {
 			if f.where == "" {
 				// If no WHERE clause, just add a basic condition check
-				pattern += " `" + f.builder.table + "`.`deleted_at` IS NULL"
+				pattern += "  WHERE `" + f.builder.table + "`.`deleted_at` IS NULL"
 			} else {
 				// If we already have a WHERE, our pattern needs to be looser
 				// We'll just make sure it matches the table name and main condition
@@ -1850,7 +1851,7 @@ func (f *FindExpectationBuilder) ReturnError(err error) *ExpectationsBuilder {
 		if !hasDeletedAt && f.builder.tc.tableHasSoftDelete(f.builder.table) {
 			if f.where == "" {
 				// If no WHERE clause, just add a basic condition check
-				pattern += " `" + f.builder.table + "`.`deleted_at` IS NULL"
+				pattern += " WHERE `" + f.builder.table + "`.`deleted_at` IS NULL"
 			} else {
 				// If we already have a WHERE, our pattern needs to be looser
 				// We'll just make sure it matches the table name and main condition
@@ -2055,8 +2056,9 @@ func (q *QueryExpectationBuilder) WithArgs(args ...interface{}) *QueryExpectatio
 //	}
 //	tc.Expect().Query("SELECT * FROM articles").ReturnModels("articles", articles)
 func (q *QueryExpectationBuilder) ReturnModels(table string, models any) *GenericExpectationBuilder {
-	// Use BuildRowsFrom to convert the models to rows
-	rows := q.builder.tc.BuildRowsFrom(table, models)
+	// Use BuildRowsWithRelations to properly handle GORM relationship fields
+	// This prevents the "unsupported data type: &map[]" error with relationship models
+	rows := q.builder.tc.BuildRowsWithRelations(table, models)
 	return q.ReturnRows(rows)
 }
 
@@ -2179,8 +2181,9 @@ func (s *SearchExpectationBuilder) ReturnCount(count int64) *SearchExpectationBu
 //	}
 //	tc.ForTable("products").ExpectSearch("phone").ReturnModels(products)
 func (s *SearchExpectationBuilder) ReturnModels(models any) *ExpectationsBuilder {
-	// Use BuildRowsFrom to convert the models to rows
-	rows := s.builder.tc.BuildRowsFrom(s.builder.table, models)
+	// Use BuildRowsWithRelations to properly handle GORM relationship fields
+	// This prevents the "unsupported data type: &map[]" error with relationship models
+	rows := s.builder.tc.BuildRowsWithRelations(s.builder.table, models)
 	return s.ReturnRows(rows)
 }
 
@@ -2213,9 +2216,36 @@ func (s *SearchExpectationBuilder) ReturnRows(rows *sqlmock.Rows) *ExpectationsB
 		query += " " + limitClause
 	}
 
-	// Setup rows expectation
-	s.builder.tc.mock.ExpectQuery(query).
-		WillReturnRows(rows)
+	// Setup rows expectation with arguments
+	expQuery := s.builder.tc.mock.ExpectQuery(query)
+
+	// Add arguments for each search field and filter
+	args := make([]driver.Value, 0)
+
+	// Add args for search fields (LIKE conditions)
+	if s.query != "" && len(s.fields) > 0 {
+		for range s.fields {
+			args = append(args, fmt.Sprintf("%%%s%%", s.query))
+		}
+	}
+
+	// Add args for filters
+	for _, filter := range s.filters {
+		switch filter.Operator {
+		case queryutil.OperatorContains:
+			// Add % for LIKE patterns
+			args = append(args, fmt.Sprintf("%%%v%%", filter.Value))
+		default:
+			args = append(args, filter.Value)
+		}
+	}
+
+	// Only set args if we have any
+	if len(args) > 0 {
+		expQuery = expQuery.WithArgs(args...)
+	}
+
+	expQuery.WillReturnRows(rows)
 
 	return s.builder
 }
@@ -2226,8 +2256,36 @@ func (s *SearchExpectationBuilder) ReturnError(err error) *ExpectationsBuilder {
 	whereClause := s.buildWhereClause()
 
 	// Setup count expectation with error
-	s.builder.tc.mock.ExpectQuery(fmt.Sprintf("SELECT count\\(\\*\\) FROM `%s` WHERE %s", s.builder.table, whereClause)).
-		WillReturnError(err)
+	query := fmt.Sprintf("SELECT count\\(\\*\\) FROM `%s` WHERE %s", s.builder.table, whereClause)
+	expQuery := s.builder.tc.mock.ExpectQuery(query)
+
+	// Add arguments for each search field and filter
+	args := make([]driver.Value, 0)
+
+	// Add args for search fields (LIKE conditions)
+	if s.query != "" && len(s.fields) > 0 {
+		for range s.fields {
+			args = append(args, fmt.Sprintf("%%%s%%", s.query))
+		}
+	}
+
+	// Add args for filters
+	for _, filter := range s.filters {
+		switch filter.Operator {
+		case queryutil.OperatorContains:
+			// Add % for LIKE patterns
+			args = append(args, fmt.Sprintf("%%%v%%", filter.Value))
+		default:
+			args = append(args, filter.Value)
+		}
+	}
+
+	// Only set args if we have any
+	if len(args) > 0 {
+		expQuery = expQuery.WithArgs(args...)
+	}
+
+	expQuery.WillReturnError(err)
 
 	return s.builder
 }
@@ -2240,25 +2298,25 @@ func (s *SearchExpectationBuilder) buildWhereClause() string {
 	if s.query != "" && len(s.fields) > 0 {
 		var fieldConditions []string
 		for _, field := range s.fields {
-			fieldConditions = append(fieldConditions, fmt.Sprintf("%s LIKE '%%%s%%'", field, s.query))
+			fieldConditions = append(fieldConditions, fmt.Sprintf("%s LIKE ?", field))
 		}
 		conditions = append(conditions, "("+strings.Join(fieldConditions, " OR ")+")")
 	}
 
-	// Add filter conditions
+	// Add filter conditions - using ? parameters instead of string literals
 	for _, filter := range s.filters {
 		var condition string
 		switch filter.Operator {
 		case queryutil.OperatorEquals:
-			condition = fmt.Sprintf("%s = '%v'", filter.Field, filter.Value)
+			condition = fmt.Sprintf("%s = ?", filter.Field)
 		case queryutil.OperatorNotEquals:
-			condition = fmt.Sprintf("%s != '%v'", filter.Field, filter.Value)
+			condition = fmt.Sprintf("%s != ?", filter.Field)
 		case queryutil.OperatorContains:
-			condition = fmt.Sprintf("%s LIKE '%%%v%%'", filter.Field, filter.Value)
+			condition = fmt.Sprintf("%s LIKE ?", filter.Field)
 		case queryutil.OperatorGTE:
-			condition = fmt.Sprintf("%s >= %v", filter.Field, filter.Value)
+			condition = fmt.Sprintf("%s >= ?", filter.Field)
 		case queryutil.OperatorLTE:
-			condition = fmt.Sprintf("%s <= %v", filter.Field, filter.Value)
+			condition = fmt.Sprintf("%s <= ?", filter.Field)
 		}
 		conditions = append(conditions, condition)
 	}

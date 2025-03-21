@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.2.14 (2025-03-21)
+
+### Fixed
+- Fixed SQL pattern matching for soft delete tables:
+  - Added missing WHERE keyword in SQL patterns for soft delete conditions
+  - This ensures correct matching of actual SQL queries GORM generates
+
+- Fixed `SearchExpectationBuilder` to use parameterized queries:
+  - Updated buildWhereClause to use ? placeholders instead of string literals
+  - Modified arguments handling to work with GORM's parameter usage
+  - Now properly works with LIKE conditions in GORM queries
+
+- Enhanced all `ReturnModels()` methods to internally use `BuildRowsWithRelations()` instead of `BuildRowsFrom()`:
+  - Fixed the high-level API to work properly with GORM relationship models 
+  - Updated `FindExpectationBuilder.ReturnModels()` to handle relationship fields
+  - Updated `SearchExpectationBuilder.ReturnModels()` to handle relationship fields
+  - Updated `QueryExpectationBuilder.ReturnModels()` to handle relationship fields
+  - This eliminates the "unsupported data type: &map[]" error when using ReturnModels() with relationships
+
+### Added
+- Added comprehensive test examples for relationship models:
+  - Direct querying tests with ExpectFind()
+  - Search testing with ExpectSearch()
+  - Custom SQL queries with Expect().Query()
+  - Filter tests with ExpectFind().Where()
+
 ## 0.2.13 (2025-03-21)
 
 ### Added
