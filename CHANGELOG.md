@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.7 (2025-03-21)
+
+### Added
+- Enhanced `BuildRowsFrom` to properly handle complex GORM models:
+  - Support for models with `gorm.Model` embedding and soft delete functionality
+  - Support for models with relationship fields (both regular and pointer types)
+  - Smart handling of has-many relationships
+  - Enhanced documentation with examples
+
+### Fixed
+- Fixed scanning errors when working with `gorm.DeletedAt` fields
+- Fixed panic when working with models containing relationship fields 
+- Improved support for nil pointer relationships in test models
+
 ## 0.2.6 (2025-03-21)
 
 ### Added

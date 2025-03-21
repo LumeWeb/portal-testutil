@@ -14,6 +14,18 @@
 // - ConcurrentTestHelper: Tools for testing concurrent operations
 // - Row Builders: Utilities for creating test data with SQL-compatible wrappers
 //
+// # Enhanced Database Relationship Handling
+//
+// The BuildRowsFrom function provides advanced capabilities for working with GORM models:
+//
+// - Detection and proper handling of relationship fields (both values and pointers)
+// - Support for embedded gorm.Model including proper handling of gorm.DeletedAt
+// - Extracting appropriate ID values from relationship structs
+// - Support for both regular models and maps for test data generation
+//
+// This allows BuildRowsFrom to work seamlessly with complex GORM models that have
+// relationships, without requiring test-specific model implementations.
+//
 // This library aims to make tests more readable, maintainable, and reliable by providing
 // domain-specific testing utilities that align with common testing patterns in the Portal ecosystem.
 package testutil
@@ -1115,6 +1127,8 @@ func (tc *DBTestContext) BuildRows(table string, data map[string]any) *sqlmock.R
 //   - Single structs or maps
 //   - Slices of structs or maps
 //   - GORM models with embedded gorm.Model
+//   - Special handling for gorm.DeletedAt soft delete fields
+//   - GORM relationship fields (both belongsTo and hasMany)
 //   - Struct field tags for custom column names
 //   - Nil pointers and nullable fields
 //
@@ -1122,8 +1136,9 @@ func (tc *DBTestContext) BuildRows(table string, data map[string]any) *sqlmock.R
 //
 // The function uses reflection to:
 //   - Extract field values from structs
-//   - Handle embedded fields (like gorm.Model)
+//   - Handle embedded fields (like gorm.Model) with special treatment for DeletedAt
 //   - Process tags for column names (gorm:"column:name" or json:"name")
+//   - Detect relationship fields and extract IDs where appropriate
 //   - Convert field names to snake_case if no tags are present
 //
 // # Usage Examples
@@ -1233,6 +1248,7 @@ func (tc *DBTestContext) BuildRowsFrom(table string, models any) *sqlmock.Rows {
 // 2. Extracts the field names and creates column names from tags or snake_case
 // 3. Extracts values from each struct to create rows
 // 4. Handles embedded structs (like gorm.Model)
+// 5. Intelligently handles relationship fields to extract usable database values
 func (tc *DBTestContext) buildRowsFromStructs(table string, models any) *sqlmock.Rows {
 	modelsVal := reflect.ValueOf(models)
 
@@ -1248,6 +1264,35 @@ func (tc *DBTestContext) buildRowsFromStructs(table string, models any) *sqlmock
 	// Extract column names from the struct fields
 	columns := make([]string, 0)
 	fieldIndices := make(map[string][]int)
+
+	// Check for gorm.Model embedding first and ensure deleted_at is included
+	// This special handling is needed because gorm.DeletedAt can cause scanning issues
+	// if not properly detected and mapped in the column list
+	for i := 0; i < firstModelType.NumField(); i++ {
+		field := firstModelType.Field(i)
+		if field.Anonymous {
+			fieldType := field.Type
+			if fieldType.Kind() == reflect.Ptr {
+				fieldType = fieldType.Elem()
+			}
+
+			// If this is gorm.Model, ensure we include deleted_at
+			if fieldType.Name() == "Model" && fieldType.PkgPath() == "gorm.io/gorm" {
+				// Add critical gorm.Model fields, ensuring deleted_at is present
+				ensureColumnInList(&columns, "id")
+				ensureColumnInList(&columns, "created_at")
+				ensureColumnInList(&columns, "updated_at")
+				ensureColumnInList(&columns, "deleted_at")
+
+				// Store the field paths for these columns
+				fieldIndices["id"] = []int{i, 0}         // ID is field 0 in gorm.Model
+				fieldIndices["created_at"] = []int{i, 1} // CreatedAt is field 1
+				fieldIndices["updated_at"] = []int{i, 2} // UpdatedAt is field 2
+				fieldIndices["deleted_at"] = []int{i, 3} // DeletedAt is field 3
+				break
+			}
+		}
+	}
 
 	// Process all fields, including embedded ones
 	tc.extractFieldNames(firstModelType, []int{}, &columns, fieldIndices)
@@ -1282,9 +1327,36 @@ func (tc *DBTestContext) buildRowsFromStructs(table string, models any) *sqlmock
 				if field.IsNil() {
 					values[col] = nil
 				} else {
-					values[col] = field.Elem().Interface()
+					elemVal := field.Elem()
+
+					// If the pointer points to a struct, check if it's a relationship
+					if elemVal.Kind() == reflect.Struct && !isBasicType(elemVal.Type()) {
+						// For relationship struct pointers, try to extract ID
+						idField := elemVal.FieldByName("ID")
+						if idField.IsValid() {
+							values[col] = idField.Interface()
+						} else {
+							values[col] = nil
+						}
+					} else {
+						// For regular pointers to basic types
+						values[col] = elemVal.Interface()
+					}
 				}
+			} else if field.Kind() == reflect.Struct && !isBasicType(field.Type()) {
+				// For non-pointer relationship structs, try to extract ID
+				idField := field.FieldByName("ID")
+				if idField.IsValid() {
+					values[col] = idField.Interface()
+				} else {
+					values[col] = nil
+				}
+			} else if field.Kind() == reflect.Slice || field.Kind() == reflect.Array {
+				// Skip slice and array fields (has-many relationships)
+				// These don't have direct columns in the database table
+				continue
 			} else {
+				// Regular field value
 				values[col] = field.Interface()
 			}
 		}
@@ -1293,6 +1365,39 @@ func (tc *DBTestContext) buildRowsFromStructs(table string, models any) *sqlmock
 	}
 
 	return builder.Build()
+}
+
+// isBasicType returns true if the type is a basic type that can be directly stored in the database.
+//
+// This function determines if a given type should be treated as a basic database column type
+// rather than a relationship. It handles both Go primitive types and special GORM types:
+//   - Go primitives: string, int, bool, etc.
+//   - time.Time: A special case handled natively by database drivers
+//   - gorm.DeletedAt: GORM's soft delete type that maps to a nullable timestamp column
+//
+// This is important for:
+// 1. Distinguishing between relationship fields (foreign entities) and basic fields
+// 2. Properly handling special types like gorm.DeletedAt that have database representations
+// 3. Ensuring consistent behavior with GORM's internal type system
+func isBasicType(t reflect.Type) bool {
+	// Check for time.Time which is a special case
+	if t.Name() == "Time" && t.PkgPath() == "time" {
+		return true
+	}
+
+	// Check for gorm.DeletedAt which is also a special case
+	if t.Name() == "DeletedAt" && t.PkgPath() == "gorm.io/gorm" {
+		return true
+	}
+
+	// Check for other basic database types
+	switch t.Kind() {
+	case reflect.String, reflect.Bool, reflect.Int, reflect.Int8, reflect.Int16,
+		reflect.Int32, reflect.Int64, reflect.Uint, reflect.Uint8, reflect.Uint16,
+		reflect.Uint32, reflect.Uint64, reflect.Float32, reflect.Float64:
+		return true
+	}
+	return false
 }
 
 // buildRowsFromMaps creates mock SQL rows from a slice of maps.
@@ -1338,6 +1443,7 @@ func (tc *DBTestContext) buildRowsFromMaps(table string, models any) *sqlmock.Ro
 // 2. Extracts column names from GORM tags, JSON tags, or field names
 // 3. Keeps track of the path to each field for later value extraction
 // 4. Handles complex nested structures with proper path tracking
+// 5. Intelligently detects and filters relationship fields
 //
 // The function builds both:
 // - A list of column names in the columns slice
@@ -1361,34 +1467,97 @@ func (tc *DBTestContext) extractFieldNames(t reflect.Type, path []int, columns *
 			continue
 		}
 
-		// Get column name from tags or field name
-		colName := field.Tag.Get("gorm")
-		if colName == "" || colName == "-" {
-			// Try JSON tag if GORM tag isn't available
-			colName = field.Tag.Get("json")
-			if colName == "" || colName == "-" {
-				// Use field name as a fallback, converting to snake_case
-				colName = toSnakeCase(field.Name)
-			} else {
-				// Handle JSON tag options like `json:"name,omitempty"`
-				colName = strings.Split(colName, ",")[0]
+		// Check if this field is a relationship that we should skip
+		isRelationship := false
+
+		// Check for slice/array fields (has-many relationships)
+		if field.Type.Kind() == reflect.Slice || field.Type.Kind() == reflect.Array {
+			// Has-many relationships should be skipped in column extraction
+			// They don't have a direct representation in the parent table
+			continue
+		}
+
+		// Check for struct fields that might be relationships
+		fieldType := field.Type
+		if fieldType.Kind() == reflect.Ptr {
+			fieldType = fieldType.Elem()
+		}
+
+		// Check GORM tags for relationship indicators
+		gormTag := field.Tag.Get("gorm")
+		// Relationship fields often have tags like foreignKey, references, many2many, etc.
+		if strings.Contains(gormTag, "foreignKey:") ||
+			strings.Contains(gormTag, "references:") ||
+			strings.Contains(gormTag, "many2many:") ||
+			strings.Contains(gormTag, "polymorphic:") {
+			// But don't exclude these - we'll extract their IDs later
+			isRelationship = true
+		}
+
+		// Also check the struct itself
+		if fieldType.Kind() == reflect.Struct {
+			// Skip special handling for time.Time which should be included as-is
+			if !(fieldType.PkgPath() == "time" && fieldType.Name() == "Time") {
+				// If from external package and not a basic type, it's likely a relationship
+				if fieldType.PkgPath() != "" && fieldType.PkgPath() != "time" {
+					isRelationship = true
+				}
 			}
-		} else {
-			// Handle GORM tag options like `gorm:"column:name;type:varchar(255)"`
-			if strings.Contains(colName, "column:") {
-				parts := strings.Split(colName, ";")
+		}
+
+		// Get column name from tags or field name
+		colName := ""
+		if gormTag != "" && gormTag != "-" {
+			// For relationship fields, try to identify if there's a specific column
+			if isRelationship {
+				// If it's a GORM relationship with a foreignKey tag,
+				// the actual column is usually named after the foreignKey
+				if strings.Contains(gormTag, "foreignKey:") {
+					// Skip this field as the foreignKey field will be included separately
+					// In newer versions with more complex support, we'd handle this better
+					continue
+				}
+			}
+
+			// Handle normal GORM tags
+			if strings.Contains(gormTag, "column:") {
+				parts := strings.Split(gormTag, ";")
 				for _, part := range parts {
 					if strings.HasPrefix(part, "column:") {
 						colName = strings.TrimPrefix(part, "column:")
 						break
 					}
 				}
-			} else {
+			} else if !isRelationship {
 				colName = toSnakeCase(field.Name)
+			}
+		} else if field.Tag.Get("json") != "" && field.Tag.Get("json") != "-" {
+			// Try JSON tag as fallback
+			jsonTag := field.Tag.Get("json")
+			colName = strings.Split(jsonTag, ",")[0]
+		} else {
+			// Default to snake_case field name
+			colName = toSnakeCase(field.Name)
+		}
+
+		// For relationship structs, we generally want the ID field
+		// but skip the actual struct field itself
+		if isRelationship {
+			// Check if there's already an ID field that represents this relationship
+			// For example, if we have Reporter struct field, check if ReporterID exists
+			idFieldName := field.Name + "ID"
+
+			// If this is a relationship field, check if there's a corresponding ID field
+			for j := 0; j < t.NumField(); j++ {
+				if t.Field(j).Name == idFieldName {
+					// There's an explicit ID field, so we can skip this relationship field
+					colName = "" // Don't add this field
+					break
+				}
 			}
 		}
 
-		// Add column to the list if not already there
+		// Add column to the list if it has a name and isn't already there
 		if colName != "" {
 			found := false
 			for _, col := range *columns {
@@ -1403,6 +1572,26 @@ func (tc *DBTestContext) extractFieldNames(t reflect.Type, path []int, columns *
 			}
 		}
 	}
+}
+
+// ensureColumnInList adds a column to the list if it's not already present.
+//
+// This helper function makes it easy to ensure that important columns like
+// "id", "created_at", "updated_at", and "deleted_at" from gorm.Model are always
+// included in the column list when using BuildRowsFrom.
+//
+// Parameters:
+//   - columns: A pointer to the string slice containing column names
+//   - colName: The column name to add if it doesn't already exist
+func ensureColumnInList(columns *[]string, colName string) {
+	// Check if the column already exists
+	for _, col := range *columns {
+		if col == colName {
+			return // Column already exists
+		}
+	}
+	// Add the column if it doesn't exist
+	*columns = append(*columns, colName)
 }
 
 // toSnakeCase converts a camelCase string to snake_case.

@@ -116,11 +116,42 @@ logger := NewTestLogger() // Returns a properly configured core.Logger
 - **Automatic Relationship Discovery**: Models and their relationships registered automatically
 - **Standardized Patterns**: Consistent approach to service testing
 
-## Version History
+## Enhanced Testing Features
 
-### v0.2.3 - Transaction Table Resolution for Models with Both Relationships and Hooks
+The test utilities in this package provide sophisticated support for many GORM features, including:
 
-Fixes table name resolution for models that have both relationships AND lifecycle hooks, which could cause "Table not set" errors in transactions:
+### Advanced GORM Model Support
+
+`BuildRowsFrom` has advanced support for GORM models:
+
+```go
+// A model with relationships and gorm.Model (which includes DeletedAt)
+type Case struct {
+    gorm.Model            // Includes ID, CreatedAt, UpdatedAt, and DeletedAt
+    ReferenceNumber string
+    ReporterID      uint
+    Reporter        Reporter `gorm:"foreignKey:ReporterID"` // Relationship field
+    Messages        []Message `gorm:"foreignKey:CaseID"`    // Has-many relationship
+}
+
+// Build mock rows directly from your model:
+rows := testCtx.BuildRowsFrom("cases", []models.Case{
+    {
+        Model:           gorm.Model{ID: 1, CreatedAt: now, UpdatedAt: now},
+        ReferenceNumber: "CASE-123",
+        ReporterID:      1,
+        Reporter:        models.Reporter{Model: gorm.Model{ID: 1}, Name: "John"},
+        Messages:        []models.Message{{Content: "Test"}},
+    },
+})
+
+// Use in SQL expectations
+testCtx.ForTable("cases").ExpectFind().ReturnRows(rows)
+```
+
+### Transaction Support for Complex Models
+
+The transaction utilities handle complex model scenarios, including models with both relationships and hooks:
 
 ```go
 // A model with both hooks and relationships
@@ -131,27 +162,27 @@ type BugModel struct {
     Related    *RelationshipOnlyModel `gorm:"foreignKey:RelatedID"`
 }
 
-// Has a lifecycle hook that previously interfered with table resolution
+// Has a lifecycle hook
 func (m *BugModel) BeforeCreate(tx *gorm.DB) error {
     return nil
 }
 
-// Register and use the model in transactions - now works correctly
+// Register and use in transactions
 testCtx.RegisterModel(&BugModel{})
 err := testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
     return tx.Create(&BugModel{Name: "test", RelatedID: 1}).Error
 })
 ```
 
-### v0.2.2 - Enhanced Transaction Support for Models with Relationships
+### Map Values and Custom Table Names
 
-Improved table name resolution for complex models with relationships in transactions:
+Transaction handling supports both map values and models with custom TableName() methods:
 
 ```go
 // Register a model with relationships
 testCtx.RegisterModel(&models.Communication{})
 
-// Now works correctly without requiring explicit table setting
+// Works with struct models
 err := testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
     return tx.Create(&models.Communication{
         CaseID:    1,
@@ -159,25 +190,15 @@ err := testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
         Direction: "incoming",
     }).Error
 })
-```
 
-### v0.2.1 - Improved Transaction Support and Callback Handling
+// Works with map values
+err = testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
+    values := map[string]interface{}{"name": "test"}
+    return tx.Model(&MyModel{}).Create(values).Error
+})
 
-- Fixed table resolution with RegisterModelWithRelationships
-- Added support for map values in Create operations
-- Eliminated GORM callback warnings with unique session IDs
-- Added precise tracking of registered callbacks
-
-### v0.2.0 - Transaction Table Resolution with Custom TableName()
-
-Fixed "Table not set" errors when using models with custom TableName() methods in transactions:
-
-```go
-// Register your model
-testCtx.RegisterModel(&MyModel{})
-
-// Now works with both value and pointer TableName() receivers
-err := testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
+// Works with custom TableName() methods
+err = testCtx.Transaction().ExecuteInTransaction(func(tx *gorm.DB) error {
     return tx.Create(&MyModel{Name: "test"}).Error
 })
 ```
@@ -570,6 +591,9 @@ testCtx.ForTable("reporters").ExpectFindAll().ReturnRows(reporterRows)
 Key features:
 - Works with maps, structs, or slices of maps/structs
 - Automatically handles GORM models and embedded structs
+- Special handling for gorm.DeletedAt fields for soft delete functionality
+- Intelligent handling of relationship fields (extracts IDs from relation structs)
+- Skips has-many relationship fields (slices/arrays) that don't map to direct columns
 - Preserves column names from GORM tags (`column:name`)
 - Converts field names to snake_case when needed
 - Handles nil values properly
