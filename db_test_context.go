@@ -709,6 +709,11 @@ func (tc *DBTestContext) PrefixTableName(table string) string {
 // In the current implementation it conservatively defaults to returning true
 // for most tables (assuming soft delete) unless a model has been registered
 // that explicitly doesn't have a deleted_at field.
+// tableHasSoftDelete checks if a table has soft delete based on registered models
+// Returns:
+// - true: if the model is registered and has DeletedAt field
+// - false: if the model is registered and doesn't have DeletedAt field
+// - true: if model is not registered (safer default, but won't add it to pattern unless model is registered)
 func (tc *DBTestContext) tableHasSoftDelete(tableName string) bool {
 	// Default to assume soft delete is used
 	useSoftDelete := true
@@ -753,6 +758,38 @@ func (tc *DBTestContext) tableHasSoftDelete(tableName string) bool {
 
 	// Default to true (safer) - will add deleted_at condition
 	return useSoftDelete
+}
+
+// isModelRegistered checks if a model for the given table is actually registered
+// This is important because GORM only adds deleted_at conditions when using registered models
+func (tc *DBTestContext) isModelRegistered(tableName string) bool {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+
+	_, exists := tc.registeredModels[tableName]
+	return exists
+}
+
+// willGORMAddSoftDeleteClause predicts if GORM will add a soft delete clause
+// based on the given SQL query type and whether the model is properly registered
+func (tc *DBTestContext) willGORMAddSoftDeleteClause(tableName string, queryType string) bool {
+	// First check if the table has soft delete - if not, GORM won't add any clause
+	if !tc.tableHasSoftDelete(tableName) {
+		return false
+	}
+
+	// For count queries specifically:
+	// 1. With Model(&model).Count() -> Schema set -> soft delete added
+	// 2. With Table("table").Count() -> Schema nil -> no soft delete
+	// We're using our testing API with tc.ForTable().ExpectCount() which assumes Table() usage,
+	// so for COUNT queries, GORM won't add soft delete clauses
+	if queryType == "COUNT" {
+		return false
+	}
+
+	// For other query types (Find, First, etc.):
+	// If the model is registered, GORM usually adds soft delete clauses
+	return tc.isModelRegistered(tableName)
 }
 
 // Expect creates a generic expectation builder for SQL operations.

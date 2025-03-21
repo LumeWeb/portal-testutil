@@ -1001,16 +1001,23 @@ func (c *CountExpectationBuilder) ReturnCount(count int64) *ExpectationsBuilder 
 
 	// Check if the WHERE clause already includes a deleted_at condition
 	hasDeletedAt := hasDeletedAtCondition(c.where)
+	hasSoftDelete := c.builder.tc.tableHasSoftDelete(c.builder.table)
 
-	// For soft delete tables, make sure our pattern includes deleted_at check
-	// only if the query doesn't already have it
-	if !hasDeletedAt && c.builder.tc.tableHasSoftDelete(c.builder.table) {
-		if c.where == "" {
-			// If no WHERE clause, just add a basic condition check
-			pattern += " `" + c.builder.table + "`.`deleted_at` IS NULL"
-		} else {
-			// If we already have a WHERE, our pattern needs to be looser
-			pattern += ".*"
+	// Now we use a smart, code-analysis based approach to predict if GORM will add
+	// a soft delete clause for this specific query type
+
+	// Check if GORM will add soft delete based on our analysis of GORM's source code
+	willGORMAddClause := c.builder.tc.willGORMAddSoftDeleteClause(c.builder.table, "COUNT")
+	isQueryingTable := !hasDeletedAt && hasSoftDelete
+
+	if isQueryingTable {
+		if willGORMAddClause {
+			// If we predict GORM will add the clause, be specific
+			pattern += " WHERE `" + c.builder.table + "`.`deleted_at` IS NULL"
+		} else if hasSoftDelete {
+			// If not, but user might use Model() instead of Table(), use flexible pattern
+			// This allows our tests to work with both Model() and Table() approaches
+			pattern += "( WHERE `" + c.builder.table + "`.`deleted_at` IS NULL)?"
 		}
 	}
 
@@ -1105,7 +1112,8 @@ func (c *CountExpectationBuilder) ReturnError(err error) *ExpectationsBuilder {
 	if !hasDeletedAt && c.builder.tc.tableHasSoftDelete(c.builder.table) {
 		if c.where == "" {
 			// If no WHERE clause, just add a basic condition check
-			pattern += " `" + c.builder.table + "`.`deleted_at` IS NULL"
+			// Fix: add "WHERE" keyword before deleted_at condition
+			pattern += " WHERE `" + c.builder.table + "`.`deleted_at` IS NULL"
 		} else {
 			// If we already have a WHERE, our pattern needs to be looser
 			pattern += ".*"

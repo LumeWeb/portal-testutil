@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.15 (2025-03-21)
+
+### Fixed
+- Fixed SQL pattern matching for COUNT queries with soft delete tables:
+  - Added intelligence to predict when GORM will add soft delete clauses
+  - Implemented flexible regex pattern matching as fallback for both Table() and Model() approaches
+  - Fixed regression with queries on soft delete tables:
+    - Model(&model).Count() adds the deleted_at IS NULL clause
+    - Table("table").Count() doesn't add the deleted_at clause
+  - Both approaches now work with a single ExpectCount() setup
+
 ## 0.2.14 (2025-03-21)
 
 ### Fixed
