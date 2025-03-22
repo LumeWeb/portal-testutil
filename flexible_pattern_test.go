@@ -604,6 +604,92 @@ func TestWithDeletedAtAndByIDAndFirstError(t *testing.T) {
 	}
 }
 
+// TestWithDeletedAtAndWhereAndFirst tests the combination of Where(), WithDeletedAt(), and First()
+// This addresses another bug similar to the ByID+WithDeletedAt+First issue, but for general Where conditions.
+func TestWithDeletedAtAndWhereAndFirst(t *testing.T) {
+	// Create a test context with SQL debug enabled
+	tc := NewDBTestContext(t, WithSQLDebug())
+	defer tc.Teardown()
+
+	// Register a model with soft delete
+	tc.RegisterModel(&TestUser{})
+
+	// Create test data
+	now := time.Now()
+	user := TestUser{
+		Model:    gorm.Model{ID: 1, CreatedAt: now, UpdatedAt: now},
+		Username: "custom_where_user",
+		Email:    "custom_where@example.com",
+		Active:   true,
+	}
+
+	// Create row for the user
+	userRow := tc.BuildRowsFrom("test_users", user)
+
+	// Set up the test case with the combined methods
+	tc.ForTable("test_users").
+		ExpectFind().
+		Where("username = ?", "custom_where_user"). // Use a custom Where condition
+		WithDeletedAt().                            // Handle deleted_at IS NULL condition
+		First().                                    // Add ORDER BY and LIMIT 1
+		ReturnRows(userRow)
+
+	// Execute GORM query with Where() and First()
+	var foundUser TestUser
+	result := tc.DB().Where("username = ?", "custom_where_user").First(&foundUser)
+
+	// Assertions
+	assert.NoError(t, result.Error)
+	assert.Equal(t, "custom_where_user", foundUser.Username)
+	assert.Equal(t, "custom_where@example.com", foundUser.Email)
+
+	// Verify expectations
+	tc.VerifyExpectations()
+
+	// Log the diagnostics for debugging
+	if diag := tc.GetLastSQLDiagnostics(); diag != "" {
+		t.Logf("SQL Diagnostics: %s", diag)
+	}
+}
+
+// TestWithDeletedAtAndWhereAndFirstError tests the combination of Where, WithDeletedAt, and First with ReturnError
+func TestWithDeletedAtAndWhereAndFirstError(t *testing.T) {
+	// Create a test context with SQL debug enabled
+	tc := NewDBTestContext(t, WithSQLDebug())
+	defer tc.Teardown()
+
+	// Register a model with soft delete
+	tc.RegisterModel(&TestUser{})
+
+	// Create a test error
+	testErr := errors.New("record not found")
+
+	// Set up the test case with the combined methods and ReturnError
+	tc.ForTable("test_users").
+		ExpectFind().
+		Where("username = ?", "nonexistent_user"). // Use a custom Where condition
+		WithDeletedAt().                           // Handle deleted_at IS NULL condition
+		First().                                   // Add ORDER BY and LIMIT 1
+		ReturnError(testErr)                       // Return an error
+
+	// Execute GORM query with Where() and First()
+	var foundUser TestUser
+	result := tc.DB().Where("username = ?", "nonexistent_user").First(&foundUser)
+
+	// Assertions
+	assert.Error(t, result.Error)
+	assert.Equal(t, testErr, result.Error)
+	assert.Empty(t, foundUser.Username) // User should not be populated
+
+	// Verify expectations
+	tc.VerifyExpectations()
+
+	// Log the diagnostics for debugging
+	if diag := tc.GetLastSQLDiagnostics(); diag != "" {
+		t.Logf("SQL Diagnostics: %s", diag)
+	}
+}
+
 // Define a test model for our test post
 type TestPost struct {
 	gorm.Model

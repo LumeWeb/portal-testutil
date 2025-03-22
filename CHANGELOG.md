@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.21 (2025-03-22)
+
+### Fixed
+- Fixed SQL pattern matching for Where + WithDeletedAt + First combination:
+  - Expanded the fix from 0.2.19 to handle all Where conditions (not just ByID)
+  - Made the pattern handling more generic to work with any WHERE clause
+  - Fixed issue where general WHERE conditions weren't properly matched when combined with WithDeletedAt and First
+  - Ensures SQL pattern correctly accounts for the deleted_at IS NULL condition position in all queries
+  - Added comprehensive test cases for both success and error cases with custom WHERE conditions
+  - Eliminates the need for manually writing Raw SQL patterns for these common combinations
+
 ## 0.2.20 (2025-03-22)
 
 ### Fixed

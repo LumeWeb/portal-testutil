@@ -1597,17 +1597,22 @@ func (f *FindExpectationBuilder) ReturnRows(rows *sqlmock.Rows) *ExpectationsBui
 	var pattern string
 	isFirstLikeQuery := f.isFirst || detectFirstLikeQuery("", f.where, f.args)
 
-	// Special case for ByID with WithDeletedAt and First
-	// This handles the specific bug with the ByID + WithDeletedAt + First combination
-	if f.withDeletedAt && strings.Contains(f.where, "`"+f.builder.table+"`.`id` = ?") && f.isFirst {
+	// Special case for any Where condition with WithDeletedAt and First
+	// This handles both ByID and custom Where conditions with WithDeletedAt and First
+	if f.withDeletedAt && f.where != "" && f.isFirst {
 		// Create an exact pattern that matches GORM's query including the deleted_at IS NULL condition
 		exactPattern := "^SELECT \\* FROM `" + f.builder.table + "` WHERE " +
 			regexp.QuoteMeta(f.where) + " AND `" + f.builder.table + "`.`deleted_at` IS NULL " +
 			"ORDER BY `" + f.builder.table + "`.`id` LIMIT 1$"
 		pattern = exactPattern
 
+		// Show appropriate debug message based on condition type
 		if f.builder.tc.debugEnabled {
-			f.builder.tc.T().Logf("Using exact ByID+WithDeletedAt+First pattern: %s", pattern)
+			if strings.Contains(f.where, "`"+f.builder.table+"`.`id` = ?") {
+				f.builder.tc.T().Logf("Using exact ByID+WithDeletedAt+First pattern: %s", pattern)
+			} else {
+				f.builder.tc.T().Logf("Using exact Where+WithDeletedAt+First pattern: %s", pattern)
+			}
 		}
 
 		// Create the expectation with the exact pattern
@@ -1848,17 +1853,22 @@ func (f *FindExpectationBuilder) ReturnError(err error) *ExpectationsBuilder {
 	var pattern string
 	isFirstLikeQuery := f.isFirst || detectFirstLikeQuery("", f.where, f.args)
 
-	// Special case for ByID with WithDeletedAt and First
-	// This handles the specific bug with the ByID + WithDeletedAt + First combination
-	if f.withDeletedAt && strings.Contains(f.where, "`"+f.builder.table+"`.`id` = ?") && f.isFirst {
+	// Special case for any Where condition with WithDeletedAt and First
+	// This handles both ByID and custom Where conditions with WithDeletedAt and First
+	if f.withDeletedAt && f.where != "" && f.isFirst {
 		// Create an exact pattern that matches GORM's query including the deleted_at IS NULL condition
 		exactPattern := "^SELECT \\* FROM `" + f.builder.table + "` WHERE " +
 			regexp.QuoteMeta(f.where) + " AND `" + f.builder.table + "`.`deleted_at` IS NULL " +
 			"ORDER BY `" + f.builder.table + "`.`id` LIMIT 1$"
 		pattern = exactPattern
 
+		// Show appropriate debug message based on condition type
 		if f.builder.tc.debugEnabled {
-			f.builder.tc.T().Logf("Using exact ByID+WithDeletedAt+First pattern for error: %s", pattern)
+			if strings.Contains(f.where, "`"+f.builder.table+"`.`id` = ?") {
+				f.builder.tc.T().Logf("Using exact ByID+WithDeletedAt+First pattern for error: %s", pattern)
+			} else {
+				f.builder.tc.T().Logf("Using exact Where+WithDeletedAt+First pattern for error: %s", pattern)
+			}
 		}
 
 		// Create the expectation with the exact pattern
