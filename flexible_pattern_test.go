@@ -1,6 +1,7 @@
 package testutil
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -554,6 +555,45 @@ func TestWithDeletedAtAndByIDAndFirst(t *testing.T) {
 	assert.NoError(t, result.Error)
 	assert.Equal(t, "combined_methods_user", foundUser.Username)
 	assert.Equal(t, "combined@example.com", foundUser.Email)
+
+	// Verify expectations
+	tc.VerifyExpectations()
+
+	// Log the diagnostics for debugging
+	if diag := tc.GetLastSQLDiagnostics(); diag != "" {
+		t.Logf("SQL Diagnostics: %s", diag)
+	}
+}
+
+// TestWithDeletedAtAndByIDAndFirstError tests the combination of WithDeletedAt, ByID, and First
+// with ReturnError. This ensures our pattern matching works correctly with both ReturnRows and ReturnError.
+func TestWithDeletedAtAndByIDAndFirstError(t *testing.T) {
+	// Create a test context with SQL debug enabled
+	tc := NewDBTestContext(t, WithSQLDebug())
+	defer tc.Teardown()
+
+	// Register a model with soft delete
+	tc.RegisterModel(&TestUser{})
+
+	// Create a test error
+	testErr := errors.New("record not found")
+
+	// Set up the test case with the combined methods
+	tc.ForTable("test_users").
+		ExpectFind().
+		ByID(uint(999)).     // Filter by primary key (non-existent ID)
+		WithDeletedAt().     // Handle deleted_at IS NULL condition
+		First().             // Add ORDER BY and LIMIT 1
+		ReturnError(testErr) // Return an error
+
+	// Execute GORM query with First() and ID
+	var foundUser TestUser
+	result := tc.DB().First(&foundUser, 999)
+
+	// Assertions
+	assert.Error(t, result.Error)
+	assert.Equal(t, testErr, result.Error)
+	assert.Empty(t, foundUser.Username) // User should not be populated
 
 	// Verify expectations
 	tc.VerifyExpectations()

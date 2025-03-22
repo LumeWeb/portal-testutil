@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.20 (2025-03-22)
+
+### Fixed
+- Fixed inconsistency between ReturnRows and ReturnError for the WithDeletedAt + ByID + First combination:
+  - Added the same exact SQL pattern handling to ReturnError that was added to ReturnRows in 0.2.19
+  - Ensured consistent behavior between success and error cases with the same query pattern
+  - Added comprehensive test case for the error path to verify the fix works correctly
+  - Fixed potential regression when testing error cases with this specific combination of methods
+
 ## 0.2.19 (2025-03-22)
 
 ### Fixed

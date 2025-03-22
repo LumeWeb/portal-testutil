@@ -1848,8 +1848,32 @@ func (f *FindExpectationBuilder) ReturnError(err error) *ExpectationsBuilder {
 	var pattern string
 	isFirstLikeQuery := f.isFirst || detectFirstLikeQuery("", f.where, f.args)
 
-	// Check for explicit deleted_at conditions first - these need special handling
-	if f.where != "" && hasDeletedAtCondition(f.where) {
+	// Special case for ByID with WithDeletedAt and First
+	// This handles the specific bug with the ByID + WithDeletedAt + First combination
+	if f.withDeletedAt && strings.Contains(f.where, "`"+f.builder.table+"`.`id` = ?") && f.isFirst {
+		// Create an exact pattern that matches GORM's query including the deleted_at IS NULL condition
+		exactPattern := "^SELECT \\* FROM `" + f.builder.table + "` WHERE " +
+			regexp.QuoteMeta(f.where) + " AND `" + f.builder.table + "`.`deleted_at` IS NULL " +
+			"ORDER BY `" + f.builder.table + "`.`id` LIMIT 1$"
+		pattern = exactPattern
+
+		if f.builder.tc.debugEnabled {
+			f.builder.tc.T().Logf("Using exact ByID+WithDeletedAt+First pattern for error: %s", pattern)
+		}
+
+		// Create the expectation with the exact pattern
+		exp := f.builder.tc.mock.ExpectQuery(pattern)
+
+		// Add arguments
+		exp = addArgsToExpectation(exp, f.args).(*sqlmock.ExpectedQuery)
+
+		// Set up the error to return
+		exp.WillReturnError(err)
+
+		return f.builder
+
+		// Check for explicit deleted_at conditions next - these need special handling
+	} else if f.where != "" && hasDeletedAtCondition(f.where) {
 		// Use our specialized function for deleted_at conditions
 		deletedAtPattern := normalizeDeletedAtCondition(f.builder.table, f.where)
 		if deletedAtPattern != "" {
