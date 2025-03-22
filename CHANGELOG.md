@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.23 (2025-03-22)
+
+### Added
+- Added convenience methods to test builders to make test creation more intuitive and expressive:
+  - Added `WithDeletedAt()` to CountExpectationBuilder to easily add the "deleted_at IS NULL" condition
+  - Added `WithWhereLike(pattern)` to CountExpectationBuilder to easily add LIKE queries
+  - Added `WithWhereLike(pattern)` to FindExpectationBuilder for consistent query building
+  - Added `OrderBy(orderBy)` to FindExpectationBuilder to easily add ORDER BY clauses
+  - Added `WillFailWithError(err)` to TransactionExpectationBuilder to configure transaction begin errors
+  - Added `WillRollback()` to TransactionExpectationBuilder as a convenience method for rollback expectations
+  - Added `RollbackOnError()` to TransactionExpectationBuilder to handle GORM's automatic rollback on error behavior
+  - Comprehensive test coverage for all new convenience methods
+  - All methods follow existing design patterns while extending them for common use cases
+
 ## 0.2.22 (2025-03-22)
 
 ### Fixed

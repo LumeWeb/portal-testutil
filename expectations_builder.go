@@ -953,6 +953,16 @@ func (c *CountExpectationBuilder) WithArgs(args ...interface{}) *CountExpectatio
 	return c
 }
 
+// WithDeletedAt adds a "deleted_at IS NULL" condition to count queries for soft-deleted records
+func (c *CountExpectationBuilder) WithDeletedAt() *CountExpectationBuilder {
+	return c.Where("deleted_at IS NULL")
+}
+
+// WithWhereLike adds a LIKE condition to the count query
+func (c *CountExpectationBuilder) WithWhereLike(pattern string) *CountExpectationBuilder {
+	return c.Where("LIKE ?", pattern)
+}
+
 // ReturnCount sets the count to return for the count expectation.
 //
 // This method specifies the result that should be returned when the count query is executed.
@@ -1234,6 +1244,50 @@ func (t *TransactionExpectationBuilder) Rollback() *ExpectationsBuilder {
 	return t.builder
 }
 
+// WillFailWithError configures the transaction to return an error when beginning
+func (t *TransactionExpectationBuilder) WillFailWithError(err error) *ExpectationsBuilder {
+	// Internally calls methods to set up a transaction begin error
+	t.builder.tc.mock.ExpectBegin().WillReturnError(err)
+	return t.builder
+}
+
+// WillRollback indicates this transaction should be rolled back (convenience method)
+func (t *TransactionExpectationBuilder) WillRollback() *ExpectationsBuilder {
+	return t.Rollback()
+}
+
+// RollbackOnError configures a transaction that will have a rollback ready to be triggered by an error
+// This sets up a transaction expectation that includes preparing for a potential rollback.
+// It's useful for testing GORM's Transaction() method that automatically rolls back on error.
+//
+// Example:
+//
+//	// This expects the code to start a transaction and either commit or rollback
+//	testCtx.ForTable("users").ExpectTransaction().RollbackOnError().Insert(1)
+//
+//	// Then in your code:
+//	db.Transaction(func(tx *gorm.DB) error {
+//	  if err := tx.Create(&user).Error; err != nil {
+//	    // GORM auto-rolls back on error
+//	    return err
+//	  }
+//	  // GORM auto-commits on success
+//	  return nil
+//	})
+func (t *TransactionExpectationBuilder) RollbackOnError() *TransactionExpectationBuilder {
+	// We tell sqlmock not to check order of expectations to allow for either commit or rollback
+	t.builder.tc.mock.MatchExpectationsInOrder(false)
+
+	// We'll expect a rollback in case of error
+	t.builder.tc.mock.ExpectRollback()
+
+	// We also expect a commit in case of success
+	// This allows for either the rollback OR commit to occur
+	t.builder.tc.mock.ExpectCommit()
+
+	return t
+}
+
 // FindExpectationBuilder builds expectations for a find operation
 type FindExpectationBuilder struct {
 	builder  *ExpectationsBuilder
@@ -1288,6 +1342,16 @@ func (f *FindExpectationBuilder) Where(where string, args ...interface{}) *FindE
 func (f *FindExpectationBuilder) WithArgs(args ...interface{}) *FindExpectationBuilder {
 	f.withArgs = args
 	return f
+}
+
+// WithWhereLike adds a LIKE condition to the find query
+func (f *FindExpectationBuilder) WithWhereLike(pattern string) *FindExpectationBuilder {
+	return f.Where("LIKE ?", pattern)
+}
+
+// OrderBy adds an ORDER BY clause to the find query
+func (f *FindExpectationBuilder) OrderBy(orderBy string) *FindExpectationBuilder {
+	return f.Where("ORDER BY ?", orderBy)
 }
 
 // ByID adds an ID filter to the find expectation
