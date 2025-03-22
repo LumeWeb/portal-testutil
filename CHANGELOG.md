@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.24 (2025-03-22)
+
+### Added
+- Enhanced LIKE query support with flexible field-based methods:
+  - Added `WithWhereLikeField(field, pattern)` to add a LIKE condition for a specific field
+  - Added `WithWhereLikeFields(fields, pattern, joinOperator)` to search across multiple fields with "AND" or "OR" joining
+  - Added convenience method `WithWhereLikeAny(fields, pattern)` for searching any of the specified fields (OR)
+  - Added convenience method `WithWhereLikeAll(fields, pattern)` for searching all of the specified fields (AND)
+  - Added convenience method `WithWhereLikeStart(field, value)` for matching the start of a string
+  - Added convenience method `WithWhereLikeEnd(field, value)` for matching the end of a string
+  - Added convenience method `WithWhereLikeContains(field, value)` for substring matching
+  - All methods available for both FindExpectationBuilder and CountExpectationBuilder
+  - Maintained backward compatibility with the original WithWhereLike method
+  - Added comprehensive test coverage for all new methods
+  - Improved SQL pattern handling and sanitization for JOIN operators
+
 ## 0.2.23 (2025-03-22)
 
 ### Added

@@ -2,6 +2,46 @@
 
 This package provides a comprehensive testing framework for database-backed services in the portal ecosystem. It is designed to simplify testing by providing a fluent interface for building SQL expectations and a registry pattern for mock services.
 
+## What's New in v0.2.24
+
+### Enhanced LIKE Query Support
+
+The new version adds enhanced WHERE LIKE query support with flexible field-based methods for both FindExpectationBuilder and CountExpectationBuilder:
+
+```go
+// Search across multiple fields with OR condition (any field can match)
+testCtx.ForTable("users").ExpectFind().
+    WithWhereLikeAny([]string{"name", "email", "username"}, "%test%").
+    ReturnModels(users)
+
+// Search across multiple fields with AND condition (all fields must match)
+testCtx.ForTable("users").ExpectFind().
+    WithWhereLikeAll([]string{"name", "email"}, "%test%").
+    ReturnModels(users)
+
+// Search by prefix (starts with)
+testCtx.ForTable("users").ExpectFind().
+    WithWhereLikeStart("email", "test").
+    ReturnModels(users)
+
+// Search by suffix (ends with)
+testCtx.ForTable("users").ExpectFind().
+    WithWhereLikeEnd("email", "example.com").
+    ReturnModels(users)
+
+// Search by substring (contains)
+testCtx.ForTable("users").ExpectFind().
+    WithWhereLikeContains("email", "test").
+    ReturnModels(users)
+
+// Advanced: Full control over field selection and join operator (AND/OR)
+testCtx.ForTable("users").ExpectFind().
+    WithWhereLikeFields([]string{"name", "email", "username"}, "%test%", "OR").
+    ReturnModels(users)
+```
+
+These methods make testing search functionality more intuitive and expressive, while reducing the need for raw SQL statements. The original `WithWhereLike` method is maintained for backward compatibility.
+
 ## What's New in v0.2.13
 
 ### Enhanced Relationship Support with BuildRowsWithRelations
@@ -505,6 +545,42 @@ testCtx.ForTable("items")
     .ExpectCount()
     .Where("region = ?", "unknown")
     .ReturnError(errors.New("region not found"))
+
+// 9. Enhanced LIKE queries with specific fields (new in v0.2.24)
+testCtx.ForTable("users")
+    .ExpectFind()
+    .WithWhereLikeField("email", "%example.com%") // Single field LIKE
+    .ReturnModels(userModels)
+
+// 10. Multi-field OR search (any field can match)
+testCtx.ForTable("users")
+    .ExpectFind()
+    .WithWhereLikeAny([]string{"name", "email", "username"}, "%test%")
+    .ReturnModels(userModels)
+
+// 11. Multi-field AND search (all fields must match)
+testCtx.ForTable("users")
+    .ExpectFind()
+    .WithWhereLikeAll([]string{"name", "email"}, "%test%")
+    .ReturnModels(userModels)
+
+// 12. Prefix matching (starts with)
+testCtx.ForTable("users")
+    .ExpectFind()
+    .WithWhereLikeStart("email", "test")
+    .ReturnModels(userModels)
+
+// 13. Suffix matching (ends with)
+testCtx.ForTable("users")
+    .ExpectFind()
+    .WithWhereLikeEnd("email", "example.com")
+    .ReturnModels(userModels)
+
+// 14. Substring matching (contains)
+testCtx.ForTable("users")
+    .ExpectFind()
+    .WithWhereLikeContains("email", "support")
+    .ReturnModels(userModels)
 ```
 
 ### 3. Validation Testing

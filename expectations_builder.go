@@ -958,9 +958,66 @@ func (c *CountExpectationBuilder) WithDeletedAt() *CountExpectationBuilder {
 	return c.Where("deleted_at IS NULL")
 }
 
-// WithWhereLike adds a LIKE condition to the count query
+// WithWhereLike adds a LIKE condition to the count query for a single field
+// This is the original method, maintained for backward compatibility
 func (c *CountExpectationBuilder) WithWhereLike(pattern string) *CountExpectationBuilder {
 	return c.Where("LIKE ?", pattern)
+}
+
+// WithWhereLikeField adds a LIKE condition for a specific field
+func (c *CountExpectationBuilder) WithWhereLikeField(field string, pattern string) *CountExpectationBuilder {
+	return c.Where(field+" LIKE ?", pattern)
+}
+
+// WithWhereLikeFields adds LIKE conditions for multiple fields
+// The conditions are joined using the specified joinOperator ("AND" or "OR")
+// If an invalid joinOperator is provided, it defaults to "OR"
+func (c *CountExpectationBuilder) WithWhereLikeFields(fields []string, pattern string, joinOperator string) *CountExpectationBuilder {
+	if len(fields) == 0 {
+		return c
+	}
+
+	// Sanitize joinOperator - only accept "AND" or "OR", default to "OR"
+	joinOp := "OR"
+	if strings.ToUpper(joinOperator) == "AND" {
+		joinOp = "AND"
+	}
+
+	var conditions []string
+	var args []interface{}
+
+	for _, field := range fields {
+		conditions = append(conditions, field+" LIKE ?")
+		args = append(args, pattern)
+	}
+
+	whereClause := "(" + strings.Join(conditions, " "+joinOp+" ") + ")"
+	return c.Where(whereClause, args...)
+}
+
+// WithWhereLikeAny is a convenience method that searches across any of the specified fields (OR)
+func (c *CountExpectationBuilder) WithWhereLikeAny(fields []string, pattern string) *CountExpectationBuilder {
+	return c.WithWhereLikeFields(fields, pattern, "OR")
+}
+
+// WithWhereLikeAll is a convenience method that searches across all of the specified fields (AND)
+func (c *CountExpectationBuilder) WithWhereLikeAll(fields []string, pattern string) *CountExpectationBuilder {
+	return c.WithWhereLikeFields(fields, pattern, "AND")
+}
+
+// WithWhereLikeStart is a convenience method for matching the start of a string
+func (c *CountExpectationBuilder) WithWhereLikeStart(field string, value string) *CountExpectationBuilder {
+	return c.WithWhereLikeField(field, value+"%")
+}
+
+// WithWhereLikeEnd is a convenience method for matching the end of a string
+func (c *CountExpectationBuilder) WithWhereLikeEnd(field string, value string) *CountExpectationBuilder {
+	return c.WithWhereLikeField(field, "%"+value)
+}
+
+// WithWhereLikeContains is a convenience method for matching anywhere in a string
+func (c *CountExpectationBuilder) WithWhereLikeContains(field string, value string) *CountExpectationBuilder {
+	return c.WithWhereLikeField(field, "%"+value+"%")
 }
 
 // ReturnCount sets the count to return for the count expectation.
@@ -1344,9 +1401,66 @@ func (f *FindExpectationBuilder) WithArgs(args ...interface{}) *FindExpectationB
 	return f
 }
 
-// WithWhereLike adds a LIKE condition to the find query
+// WithWhereLike adds a LIKE condition to the find query for a single field
+// This is the original method, maintained for backward compatibility
 func (f *FindExpectationBuilder) WithWhereLike(pattern string) *FindExpectationBuilder {
 	return f.Where("LIKE ?", pattern)
+}
+
+// WithWhereLikeField adds a LIKE condition for a specific field
+func (f *FindExpectationBuilder) WithWhereLikeField(field string, pattern string) *FindExpectationBuilder {
+	return f.Where(field+" LIKE ?", pattern)
+}
+
+// WithWhereLikeFields adds LIKE conditions for multiple fields
+// The conditions are joined using the specified joinOperator ("AND" or "OR")
+// If an invalid joinOperator is provided, it defaults to "OR"
+func (f *FindExpectationBuilder) WithWhereLikeFields(fields []string, pattern string, joinOperator string) *FindExpectationBuilder {
+	if len(fields) == 0 {
+		return f
+	}
+
+	// Sanitize joinOperator - only accept "AND" or "OR", default to "OR"
+	joinOp := "OR"
+	if strings.ToUpper(joinOperator) == "AND" {
+		joinOp = "AND"
+	}
+
+	var conditions []string
+	var args []interface{}
+
+	for _, field := range fields {
+		conditions = append(conditions, field+" LIKE ?")
+		args = append(args, pattern)
+	}
+
+	whereClause := "(" + strings.Join(conditions, " "+joinOp+" ") + ")"
+	return f.Where(whereClause, args...)
+}
+
+// WithWhereLikeAny is a convenience method that searches across any of the specified fields (OR)
+func (f *FindExpectationBuilder) WithWhereLikeAny(fields []string, pattern string) *FindExpectationBuilder {
+	return f.WithWhereLikeFields(fields, pattern, "OR")
+}
+
+// WithWhereLikeAll is a convenience method that searches across all of the specified fields (AND)
+func (f *FindExpectationBuilder) WithWhereLikeAll(fields []string, pattern string) *FindExpectationBuilder {
+	return f.WithWhereLikeFields(fields, pattern, "AND")
+}
+
+// WithWhereLikeStart is a convenience method for matching the start of a string
+func (f *FindExpectationBuilder) WithWhereLikeStart(field string, value string) *FindExpectationBuilder {
+	return f.WithWhereLikeField(field, value+"%")
+}
+
+// WithWhereLikeEnd is a convenience method for matching the end of a string
+func (f *FindExpectationBuilder) WithWhereLikeEnd(field string, value string) *FindExpectationBuilder {
+	return f.WithWhereLikeField(field, "%"+value)
+}
+
+// WithWhereLikeContains is a convenience method for matching anywhere in a string
+func (f *FindExpectationBuilder) WithWhereLikeContains(field string, value string) *FindExpectationBuilder {
+	return f.WithWhereLikeField(field, "%"+value+"%")
 }
 
 // OrderBy adds an ORDER BY clause to the find query
