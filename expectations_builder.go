@@ -1587,9 +1587,8 @@ func (f *FindExpectationBuilder) HandleDeletedNotNullRows(rows *sqlmock.Rows) *E
 //	userModel := User{ID: 1, Name: "Alice"}
 //	tc.ForTable("users").ExpectFind().ReturnModels(userModel)
 func (f *FindExpectationBuilder) ReturnModels(models any) *ExpectationsBuilder {
-	// Use BuildRowsWithRelations to properly handle GORM relationship fields
-	// This prevents the "unsupported data type: &map[]" error with relationship models
-	rows := f.builder.tc.BuildRowsWithRelations(f.builder.table, models)
+	// Use BuildRowsFrom which now properly handles relationship fields and preserves foreign keys
+	rows := f.builder.tc.BuildRowsFrom(f.builder.table, models)
 	return f.ReturnRows(rows)
 }
 
@@ -2122,9 +2121,8 @@ func (q *QueryExpectationBuilder) WithArgs(args ...interface{}) *QueryExpectatio
 //	}
 //	tc.Expect().Query("SELECT * FROM articles").ReturnModels("articles", articles)
 func (q *QueryExpectationBuilder) ReturnModels(table string, models any) *GenericExpectationBuilder {
-	// Use BuildRowsWithRelations to properly handle GORM relationship fields
-	// This prevents the "unsupported data type: &map[]" error with relationship models
-	rows := q.builder.tc.BuildRowsWithRelations(table, models)
+	// Use BuildRowsFrom which now properly handles relationship fields and preserves foreign keys
+	rows := q.builder.tc.BuildRowsFrom(table, models)
 	return q.ReturnRows(rows)
 }
 
@@ -2247,9 +2245,8 @@ func (s *SearchExpectationBuilder) ReturnCount(count int64) *SearchExpectationBu
 //	}
 //	tc.ForTable("products").ExpectSearch("phone").ReturnModels(products)
 func (s *SearchExpectationBuilder) ReturnModels(models any) *ExpectationsBuilder {
-	// Use BuildRowsWithRelations to properly handle GORM relationship fields
-	// This prevents the "unsupported data type: &map[]" error with relationship models
-	rows := s.builder.tc.BuildRowsWithRelations(s.builder.table, models)
+	// Use BuildRowsFrom which now properly handles relationship fields and preserves foreign keys
+	rows := s.builder.tc.BuildRowsFrom(s.builder.table, models)
 	return s.ReturnRows(rows)
 }
 

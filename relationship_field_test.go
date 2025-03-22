@@ -193,3 +193,91 @@ func TestBuildRowsFrom_MapsStillWork(t *testing.T) {
 	// If we get here without a panic, the test passes
 	assert.NotNil(t, rows, "BuildRowsFrom should still work with maps containing relationship IDs")
 }
+
+// TestForeignKeyIDsPreservation tests specifically that foreign key IDs
+// like ReporterID and SubjectID are correctly preserved in query results
+func TestForeignKeyIDsPreservation(t *testing.T) {
+	// Create a test context with debug
+	tc := NewDBTestContext(t, WithSQLDebug())
+	tc.debugEnabled = true // Enable more detailed debug output
+	defer tc.Teardown()
+
+	// Register our models
+	tc.RegisterModel(&RelTestCase{})
+	tc.RegisterModel(&RelTestReporter{})
+	tc.RegisterModel(&RelTestSubject{})
+
+	// Create test data
+	now := time.Now()
+	testCase := RelTestCase{
+		Model:       gorm.Model{ID: 1, CreatedAt: now, UpdatedAt: now},
+		Reference:   "CASE-001",
+		Description: "Test case",
+		Status:      "OPEN",
+		ReporterID:  10, // Set non-zero ReporterID
+		SubjectID:   20, // Set non-zero SubjectID
+	}
+
+	// Test with ByID pattern
+	t.Run("ByID pattern preserves foreign key IDs", func(t *testing.T) {
+		// Create the row using ReturnModels
+		tc.ForTable("rel_test_cases").
+			ExpectFind().
+			ByID(uint(1)).
+			WithDeletedAt().
+			First().
+			ReturnModels([]RelTestCase{testCase})
+
+		// Execute the query
+		var result RelTestCase
+		tc.DB().First(&result, 1)
+
+		// Verify that foreign key IDs are preserved correctly
+		assert.Equal(t, uint(1), result.ID, "ID should be preserved")
+		assert.Equal(t, "CASE-001", result.Reference, "Reference should be preserved")
+		assert.Equal(t, uint(10), result.ReporterID, "ReporterID should be preserved")
+		assert.Equal(t, uint(20), result.SubjectID, "SubjectID should be preserved")
+	})
+
+	// Test with Where pattern
+	t.Run("Where pattern preserves foreign key IDs", func(t *testing.T) {
+		// Create the row using ReturnModels
+		tc.ForTable("rel_test_cases").
+			ExpectFind().
+			Where("reference = ?", "CASE-001").
+			WithDeletedAt().
+			First().
+			ReturnModels([]RelTestCase{testCase})
+
+		// Execute the query
+		var result RelTestCase
+		tc.DB().Where("reference = ?", "CASE-001").First(&result)
+
+		// Verify that foreign key IDs are preserved correctly
+		assert.Equal(t, uint(1), result.ID, "ID should be preserved")
+		assert.Equal(t, "CASE-001", result.Reference, "Reference should be preserved")
+		assert.Equal(t, uint(10), result.ReporterID, "ReporterID should be preserved")
+		assert.Equal(t, uint(20), result.SubjectID, "SubjectID should be preserved")
+	})
+
+	// Test with direct BuildRowsFrom
+	t.Run("Direct BuildRowsFrom preserves foreign key IDs", func(t *testing.T) {
+		// Create the row directly
+		rows := tc.BuildRowsFrom("rel_test_cases", testCase)
+
+		// Set up the raw SQL mock
+		tc.Raw().ExpectQuery("SELECT \\* FROM `rel_test_cases` WHERE reference = \\? AND `rel_test_cases`.`deleted_at` IS NULL ORDER BY `rel_test_cases`.`id` LIMIT 1").
+			WithArgs("CASE-001").
+			WillReturnRows(rows)
+
+		// Execute the query
+		var result RelTestCase
+		tc.DB().Where("reference = ?", "CASE-001").First(&result)
+
+		// Verify that foreign key IDs are preserved correctly
+		assert.Equal(t, uint(1), result.ID, "ID should be preserved")
+		assert.Equal(t, "CASE-001", result.Reference, "Reference should be preserved")
+		assert.Equal(t, uint(10), result.ReporterID, "ReporterID should be preserved")
+		assert.Equal(t, uint(20), result.SubjectID, "SubjectID should be preserved")
+	})
+}

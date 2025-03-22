@@ -1275,6 +1275,7 @@ func (tc *DBTestContext) BuildRows(table string, data map[string]any) *sqlmock.R
 //
 // Returns a *sqlmock.Rows object that can be used with ExpectationsBuilder.ReturnRows().
 // For unsupported input types or empty slices, returns an empty *sqlmock.Rows.
+
 func (tc *DBTestContext) BuildRowsFrom(table string, models any) *sqlmock.Rows {
 	// For nil models, return an empty result
 	if models == nil {
@@ -1379,6 +1380,30 @@ func (tc *DBTestContext) buildRowsFromStructs(table string, models any) *sqlmock
 				fieldIndices["deleted_at"] = []int{i, 3} // DeletedAt is field 3
 				break
 			}
+		}
+	}
+
+	// Explicitly check for fields ending with "ID" that might be foreign keys
+	// This ensures fields like ReporterID and SubjectID are always included
+	for i := 0; i < firstModelType.NumField(); i++ {
+		field := firstModelType.Field(i)
+		fieldName := field.Name
+
+		// Skip embedded fields like gorm.Model (handled separately above)
+		if field.Anonymous {
+			continue
+		}
+
+		// Look specifically for fields ending with "ID" that are likely foreign keys
+		if strings.HasSuffix(fieldName, "ID") && field.Type.Kind() == reflect.Uint {
+			// This is likely a foreign key ID field
+			colName := toSnakeCase(fieldName)
+
+			// Ensure the column is included
+			ensureColumnInList(&columns, colName)
+
+			// Store the direct path to this field
+			fieldIndices[colName] = []int{i}
 		}
 	}
 
@@ -1636,13 +1661,38 @@ func (tc *DBTestContext) extractFieldNames(t reflect.Type, path []int, columns *
 			idFieldName := field.Name + "ID"
 
 			// If this is a relationship field, check if there's a corresponding ID field
+			hasIDField := false
+			var idFieldIndex int
+
+			// First, explicitly check for field names that end with "ID"
 			for j := 0; j < t.NumField(); j++ {
-				if t.Field(j).Name == idFieldName {
-					// There's an explicit ID field, so we can skip this relationship field
-					colName = "" // Don't add this field
+				idFieldInfo := t.Field(j)
+				if idFieldInfo.Name == idFieldName {
+					hasIDField = true
+					idFieldIndex = j
+
 					break
 				}
 			}
+
+			if hasIDField {
+				// There's an explicit ID field, so we must ensure it's in the columns list
+				idColName := toSnakeCase(idFieldName)
+
+				// Always add the ID field column and ensure its path is correct
+				// This ensures fields like ReporterID and SubjectID are included
+				ensureColumnInList(columns, idColName)
+
+				// Store the exact path to this field for later value extraction
+				fieldIndices[idColName] = []int{idFieldIndex}
+
+			}
+
+			if hasIDField {
+				// We found and added the ID field, so we can skip the relationship struct
+				colName = "" // Don't add the relationship field itself
+			}
+			// If we didn't find an ID field, we should keep the relationship struct (colName unchanged)
 		}
 
 		// Add column to the list if it has a name and isn't already there
@@ -1694,6 +1744,22 @@ func toSnakeCase(s string) string {
 	// Special case for common field names
 	if s == "ID" {
 		return "id" // Ensure ID is always lowercase
+	}
+
+	// Special case for fields ending with ID to handle fields like ReporterID, SubjectID
+	if strings.HasSuffix(s, "ID") {
+		prefix := s[:len(s)-2]
+		snakePrefix := ""
+
+		// Convert the prefix to snake case
+		for i, c := range prefix {
+			if i > 0 && c >= 'A' && c <= 'Z' {
+				snakePrefix += "_"
+			}
+			snakePrefix += string(unicode.ToLower(c))
+		}
+
+		return snakePrefix + "_id" // Append _id instead of _i_d
 	}
 
 	var result strings.Builder

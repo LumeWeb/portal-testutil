@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.22 (2025-03-22)
+
+### Fixed
+- Fixed bug in model-to-SQL row conversion that caused relationship ID fields to be missing:
+  - Ensures foreign key fields like ReporterID and SubjectID are preserved in SQL rows
+  - Resolves validation errors like "subject is required" or "unauthorized access" in tests
+  - Improved overall reliability of relationship handling
+  - Enhanced performance with optimized field detection
+
 ## 0.2.21 (2025-03-22)
 
 ### Fixed
