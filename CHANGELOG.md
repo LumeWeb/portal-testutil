@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.25 (2025-03-22)
+
+### Added
+- Enhanced pagination support with new fluent interface methods:
+  - Added `Limit(limit)` to add a LIMIT clause to queries
+  - Added `Offset(offset)` to add an OFFSET clause to queries
+  - Added `LimitOffset(limit, offset)` to add both clauses in one call
+  - Added `WithLimit(limit)` and `WithOffset(offset)` convenience methods
+  - Added `WithPagination(pagination)` for queryutil.Pagination support
+  - All methods available for both FindExpectationBuilder and CountExpectationBuilder
+  - Matches pattern of existing OrderBy() and WithWhereLike() methods
+  - Comprehensive test coverage for all pagination methods
+  - Consistent API for improved developer experience
+
 ## 0.2.24 (2025-03-22)
 
 ### Added

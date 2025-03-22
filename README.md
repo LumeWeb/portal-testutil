@@ -2,11 +2,43 @@
 
 This package provides a comprehensive testing framework for database-backed services in the portal ecosystem. It is designed to simplify testing by providing a fluent interface for building SQL expectations and a registry pattern for mock services.
 
-## What's New in v0.2.24
+## Pagination Support
 
-### Enhanced LIKE Query Support
+The library provides a fluent interface for working with paginated queries in both FindExpectationBuilder and CountExpectationBuilder:
 
-The new version adds enhanced WHERE LIKE query support with flexible field-based methods for both FindExpectationBuilder and CountExpectationBuilder:
+```go
+// Basic pagination with LIMIT
+testCtx.ForTable("users").ExpectFind().
+    Limit(10).
+    ReturnModels(users)
+
+// Pagination with OFFSET
+testCtx.ForTable("users").ExpectFind().
+    Offset(20).
+    ReturnModels(users)
+
+// Combined LIMIT and OFFSET in one call
+testCtx.ForTable("users").ExpectFind().
+    LimitOffset(10, 20).
+    ReturnModels(users)
+
+// Using WithLimit and WithOffset convenience methods
+testCtx.ForTable("users").ExpectFind().
+    WithLimit(10).WithOffset(20).
+    ReturnModels(users)
+
+// Using queryutil.Pagination for integration with queryutil package
+testCtx.ForTable("users").ExpectFind().
+    WithPagination(queryutil.Pagination{
+        Start: 20,
+        PageSize: 10,
+    }).
+    ReturnModels(users)
+```
+
+## Enhanced LIKE Query Support
+
+The library provides flexible field-based methods for LIKE queries in both FindExpectationBuilder and CountExpectationBuilder:
 
 ```go
 // Search across multiple fields with OR condition (any field can match)
@@ -580,6 +612,39 @@ testCtx.ForTable("users")
 testCtx.ForTable("users")
     .ExpectFind()
     .WithWhereLikeContains("email", "support")
+    .ReturnModels(userModels)
+
+// 15. Basic pagination with LIMIT
+testCtx.ForTable("users")
+    .ExpectFind()
+    .Limit(10)
+    .ReturnModels(userModels)
+
+// 16. Pagination with OFFSET
+testCtx.ForTable("users")
+    .ExpectFind()
+    .Offset(20)
+    .ReturnModels(userModels)
+
+// 17. Combined LIMIT and OFFSET in one call
+testCtx.ForTable("users")
+    .ExpectFind()
+    .LimitOffset(10, 20)
+    .ReturnModels(userModels)
+
+// 18. Using WithLimit and WithOffset convenience methods
+testCtx.ForTable("users")
+    .ExpectFind()
+    .WithLimit(10).WithOffset(20)
+    .ReturnModels(userModels)
+
+// 19. Using queryutil.Pagination for integration with queryutil package
+testCtx.ForTable("users")
+    .ExpectFind()
+    .WithPagination(queryutil.Pagination{
+        Start: 20,
+        PageSize: 10,
+    })
     .ReturnModels(userModels)
 ```
 

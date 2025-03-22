@@ -1020,6 +1020,51 @@ func (c *CountExpectationBuilder) WithWhereLikeContains(field string, value stri
 	return c.WithWhereLikeField(field, "%"+value+"%")
 }
 
+// Limit adds a LIMIT clause to the count query
+func (c *CountExpectationBuilder) Limit(limit int) *CountExpectationBuilder {
+	return c.Where("LIMIT ?", limit)
+}
+
+// Offset adds an OFFSET clause to the count query
+func (c *CountExpectationBuilder) Offset(offset int) *CountExpectationBuilder {
+	return c.Where("OFFSET ?", offset)
+}
+
+// LimitOffset adds both LIMIT and OFFSET clauses to the count query
+func (c *CountExpectationBuilder) LimitOffset(limit int, offset int) *CountExpectationBuilder {
+	return c.Where("LIMIT ? OFFSET ?", limit, offset)
+}
+
+// WithLimit is a convenience method that adds a LIMIT clause to the count query
+// This follows the WithX naming pattern for consistency with other methods
+func (c *CountExpectationBuilder) WithLimit(limit int) *CountExpectationBuilder {
+	return c.Limit(limit)
+}
+
+// WithOffset is a convenience method that adds an OFFSET clause to the count query
+// This follows the WithX naming pattern for consistency with other methods
+func (c *CountExpectationBuilder) WithOffset(offset int) *CountExpectationBuilder {
+	return c.Offset(offset)
+}
+
+// WithPagination adds pagination parameters to the count query
+// It uses the Start and PageSize values from queryutil.Pagination
+// to add appropriate LIMIT and OFFSET clauses
+func (c *CountExpectationBuilder) WithPagination(pagination queryutil.Pagination) *CountExpectationBuilder {
+	if pagination.PageSize <= 0 {
+		return c
+	}
+
+	// Use start (offset) directly
+	offset := pagination.Start
+
+	// Add LIMIT/OFFSET clauses
+	if offset > 0 {
+		return c.LimitOffset(pagination.PageSize, offset)
+	}
+	return c.Limit(pagination.PageSize)
+}
+
 // ReturnCount sets the count to return for the count expectation.
 //
 // This method specifies the result that should be returned when the count query is executed.
@@ -1466,6 +1511,51 @@ func (f *FindExpectationBuilder) WithWhereLikeContains(field string, value strin
 // OrderBy adds an ORDER BY clause to the find query
 func (f *FindExpectationBuilder) OrderBy(orderBy string) *FindExpectationBuilder {
 	return f.Where("ORDER BY ?", orderBy)
+}
+
+// Limit adds a LIMIT clause to the find query
+func (f *FindExpectationBuilder) Limit(limit int) *FindExpectationBuilder {
+	return f.Where("LIMIT ?", limit)
+}
+
+// Offset adds an OFFSET clause to the find query
+func (f *FindExpectationBuilder) Offset(offset int) *FindExpectationBuilder {
+	return f.Where("OFFSET ?", offset)
+}
+
+// LimitOffset adds both LIMIT and OFFSET clauses to the find query
+func (f *FindExpectationBuilder) LimitOffset(limit int, offset int) *FindExpectationBuilder {
+	return f.Where("LIMIT ? OFFSET ?", limit, offset)
+}
+
+// WithLimit is a convenience method that adds a LIMIT clause to the find query
+// This follows the WithX naming pattern for consistency with other methods
+func (f *FindExpectationBuilder) WithLimit(limit int) *FindExpectationBuilder {
+	return f.Limit(limit)
+}
+
+// WithOffset is a convenience method that adds an OFFSET clause to the find query
+// This follows the WithX naming pattern for consistency with other methods
+func (f *FindExpectationBuilder) WithOffset(offset int) *FindExpectationBuilder {
+	return f.Offset(offset)
+}
+
+// WithPagination adds pagination parameters to the find query
+// It uses the Start and PageSize values from queryutil.Pagination
+// to add appropriate LIMIT and OFFSET clauses
+func (f *FindExpectationBuilder) WithPagination(pagination queryutil.Pagination) *FindExpectationBuilder {
+	if pagination.PageSize <= 0 {
+		return f
+	}
+
+	// Use start (offset) directly
+	offset := pagination.Start
+
+	// Add LIMIT/OFFSET clauses
+	if offset > 0 {
+		return f.LimitOffset(pagination.PageSize, offset)
+	}
+	return f.Limit(pagination.PageSize)
 }
 
 // ByID adds an ID filter to the find expectation
