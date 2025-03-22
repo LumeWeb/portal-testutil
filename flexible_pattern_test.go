@@ -515,6 +515,55 @@ func TestHandleDeletedAtRows(t *testing.T) {
 	tc.VerifyExpectations()
 }
 
+// TestWithDeletedAtAndByIDAndFirst tests the specific combination of WithDeletedAt, ByID, and First
+// that was reported in the bug. This tests that our SQL pattern correctly matches GORM's actual
+// query pattern when all three methods are used together.
+func TestWithDeletedAtAndByIDAndFirst(t *testing.T) {
+	// Create a test context with SQL debug enabled
+	tc := NewDBTestContext(t, WithSQLDebug())
+	defer tc.Teardown()
+
+	// Register a model with soft delete
+	tc.RegisterModel(&TestUser{})
+
+	// Create test data
+	now := time.Now()
+	user := TestUser{
+		Model:    gorm.Model{ID: 1, CreatedAt: now, UpdatedAt: now},
+		Username: "combined_methods_user",
+		Email:    "combined@example.com",
+		Active:   true,
+	}
+
+	// Create row for the user
+	userRow := tc.BuildRowsFrom("test_users", user)
+
+	// Set up the test case with the combined methods
+	tc.ForTable("test_users").
+		ExpectFind().
+		ByID(uint(1)).   // Filter by primary key
+		WithDeletedAt(). // Handle deleted_at IS NULL condition
+		First().         // Add ORDER BY and LIMIT 1
+		ReturnRows(userRow)
+
+	// Execute GORM query with First() and ID
+	var foundUser TestUser
+	result := tc.DB().First(&foundUser, 1)
+
+	// Assertions
+	assert.NoError(t, result.Error)
+	assert.Equal(t, "combined_methods_user", foundUser.Username)
+	assert.Equal(t, "combined@example.com", foundUser.Email)
+
+	// Verify expectations
+	tc.VerifyExpectations()
+
+	// Log the diagnostics for debugging
+	if diag := tc.GetLastSQLDiagnostics(); diag != "" {
+		t.Logf("SQL Diagnostics: %s", diag)
+	}
+}
+
 // Define a test model for our test post
 type TestPost struct {
 	gorm.Model

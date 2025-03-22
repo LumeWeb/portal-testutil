@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.19 (2025-03-22)
+
+### Fixed
+- Fixed SQL pattern matching issue with WithDeletedAt + ByID + First combination:
+  - Added specific pattern handling for the combination of these three methods
+  - Properly matches GORM's SQL query when using First() with a primary key on a soft delete model
+  - Fixed issue where deleted_at IS NULL condition was inserted between ID condition and ORDER BY clause
+  - Ensures SQL pattern correctly accounts for the exact position of the deleted_at IS NULL condition
+  - Added comprehensive test case to verify the fix works with this specific combination
+  - Eliminates the need for using raw SQL expectations for these common query patterns
+
 ## 0.2.18 (2025-03-21)
 
 ### Added

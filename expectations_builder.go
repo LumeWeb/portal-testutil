@@ -1597,8 +1597,32 @@ func (f *FindExpectationBuilder) ReturnRows(rows *sqlmock.Rows) *ExpectationsBui
 	var pattern string
 	isFirstLikeQuery := f.isFirst || detectFirstLikeQuery("", f.where, f.args)
 
-	// Special case for WithDeletedAt flag with deleted_at IS NULL WHERE
-	if f.withDeletedAt && f.where == "deleted_at IS NULL" && f.isFirst {
+	// Special case for ByID with WithDeletedAt and First
+	// This handles the specific bug with the ByID + WithDeletedAt + First combination
+	if f.withDeletedAt && strings.Contains(f.where, "`"+f.builder.table+"`.`id` = ?") && f.isFirst {
+		// Create an exact pattern that matches GORM's query including the deleted_at IS NULL condition
+		exactPattern := "^SELECT \\* FROM `" + f.builder.table + "` WHERE " +
+			regexp.QuoteMeta(f.where) + " AND `" + f.builder.table + "`.`deleted_at` IS NULL " +
+			"ORDER BY `" + f.builder.table + "`.`id` LIMIT 1$"
+		pattern = exactPattern
+
+		if f.builder.tc.debugEnabled {
+			f.builder.tc.T().Logf("Using exact ByID+WithDeletedAt+First pattern: %s", pattern)
+		}
+
+		// Create the expectation with the exact pattern
+		exp := f.builder.tc.mock.ExpectQuery(pattern)
+
+		// Add arguments
+		exp = addArgsToExpectation(exp, f.args).(*sqlmock.ExpectedQuery)
+
+		// Set up the rows to return
+		exp.WillReturnRows(rows)
+
+		return f.builder
+
+		// Special case for WithDeletedAt flag with deleted_at IS NULL WHERE
+	} else if f.withDeletedAt && f.where == "deleted_at IS NULL" && f.isFirst {
 		// VERY specific pattern for the TestExplicitDeletedAtInFind test
 		// This matches the exact SQL GORM generates in that test
 		exactPattern := "^SELECT \\* FROM `" + f.builder.table + "` WHERE deleted_at IS NULL " +
